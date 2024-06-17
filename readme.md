@@ -2,6 +2,13 @@
 
 PraisonAI is a sophisticated chatbot built using the Streamlit framework. It integrates multiple language model providers to offer a flexible and customizable conversational experience. This project includes tools for managing and editing chatbot agents, and can be configured to use different AI frameworks.
 
+</details>
+
+## Connect with Me
+| Contact Info       |                      |
+|--------------------|----------------------|
+| Joseph LePore  | [![Linkedin Badge](https://img.shields.io/badge/-Linkedin-blue?style=flat&logo=Linkedin&logoColor=white)](https://www.linkedin.com/in/joseph-lepore-062561b3/)    |
+
 ## Features
 
 - **Multiple LLM Providers**: Select from various language model providers such as OpenAI, Ollama Mistral, FastChat, LM Studio, Mistral, and Groq.

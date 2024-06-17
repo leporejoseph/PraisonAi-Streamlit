@@ -1,6 +1,8 @@
+# app.py
+
 from praisonai import PraisonAI
 import streamlit as st
-from utils import update_env, get_agents_list, get_api_key, initialize_env, rename_and_move_yaml, load_yaml, save_yaml, initialize_session_state
+from utils import update_env, get_agents_list, get_api_key, initialize_env, rename_and_move_yaml, load_yaml, save_yaml, initialize_session_state, save_conversation_history, clear_conversation_history, save_selected_llm_provider
 from config import MODEL_SETTINGS, FRAMEWORK_OPTIONS, DEFAULT_FRAMEWORK, AGENTS_DIR, AVAILABLE_TOOLS
 
 # Set Streamlit to wide mode
@@ -13,15 +15,16 @@ initialize_session_state()
 def update_model():
     st.session_state.api_key = get_api_key(st.session_state.llm_model)
     update_env(st.session_state.llm_model, st.session_state.api_base, st.session_state.api_key)
+    save_selected_llm_provider(st.session_state.llm_model)
 
-def generate_response(framework_name):
-        praison_ai_args = {
-            "framework": framework_name,
-            "auto": prompt if agent == "Auto Generate New Agents" else None,
-            "agent_file": f"{AGENTS_DIR}/{agent}" if agent != "Auto Generate New Agents" else None
-        }
-        praison_ai = PraisonAI(**{k: v for k, v in praison_ai_args.items() if v is not None})
-        return praison_ai.main()
+def generate_response(framework_name, prompt, agent):
+    praison_ai_args = {
+        "framework": framework_name,
+        "auto": prompt if agent == "Auto Generate New Agents" else None,
+        "agent_file": "test.yaml" if framework_name == "crewai" else f"{AGENTS_DIR}/{agent}" if agent != "Auto Generate New Agents" else None
+    }
+    praison_ai = PraisonAI(**{k: v for k, v in praison_ai_args.items() if v is not None})
+    return praison_ai.main()
 
 @st.experimental_dialog("Edit Agents", width="large")
 def edit_agent_dialog():
@@ -64,7 +67,7 @@ def edit_agent_dialog():
         yaml_data["topic"] = topic
         yaml_data["roles"] = updated_roles
         save_yaml(yaml_data, f"{AGENTS_DIR}/{agent}")
-        st.toast(f"{agent} has been updated.")
+        st.toast(f":robot: {agent} has been updated.")
         st.session_state.show_edit_container = False
         st.rerun()
 
@@ -79,19 +82,24 @@ with st.sidebar:
         st.text_input("API Base", value=MODEL_SETTINGS[st.session_state.llm_model]["OPENAI_API_BASE"], key='api_base')
         st.text_input("Model", value=MODEL_SETTINGS[st.session_state.llm_model]["OPENAI_MODEL_NAME"], key='model_name')
         st.text_input("API Key", value=st.session_state.api_key, key='api_key', type="password")
+        if st.button("Clear Chat"):
+            clear_conversation_history()
     
     with st.expander("Agent Settings", expanded=True):
         framework = st.selectbox("Agentic Framework", options=FRAMEWORK_OPTIONS, index=FRAMEWORK_OPTIONS.index(DEFAULT_FRAMEWORK))
-        agents_list = get_agents_list()
-        agent = st.selectbox("Select Existing Agents", options=sorted(agents_list), index=agents_list.index("Auto Generate New Agents") if "Auto Generate New Agents" in agents_list else 0)
+        if framework != "None":
+            agents_list = get_agents_list()
+            agent = st.selectbox("Select Existing Agents", options=sorted(agents_list), index=agents_list.index("Auto Generate New Agents") if "Auto Generate New Agents" in agents_list else 0)
 
-        edit_button_placeholder = st.empty()
-        if agent != "Auto Generate New Agents" and not st.session_state.show_edit_container:
-            with edit_button_placeholder:
-                if st.button("Edit Agent"):
-                    st.session_state.show_edit_container = True
-                    edit_button_placeholder.empty()
-                    edit_agent_dialog()
+            edit_button_placeholder = st.empty()
+            if agent != "Auto Generate New Agents" and not st.session_state.show_edit_container:
+                with edit_button_placeholder:
+                    if st.button("Edit Agent"):
+                        st.session_state.show_edit_container = True
+                        edit_button_placeholder.empty()
+                        edit_agent_dialog()
+        else:
+            agent = None
 
 update_env(st.session_state.llm_model, st.session_state.api_base, st.session_state.api_key)
 
@@ -103,6 +111,7 @@ if prompt := st.chat_input("Type your message here..."):
     with st.chat_message("user"):
         st.markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
+    save_conversation_history(st.session_state.messages)
 
     with st.chat_message("assistant"):
         if framework.lower() == "none":
@@ -113,40 +122,48 @@ if prompt := st.chat_input("Type your message here..."):
             )
             response = st.write_stream(stream)
             st.session_state.messages.append({"role": "assistant", "content": response})
+            save_conversation_history(st.session_state.messages)
 
         elif framework.lower() == "battle":
             col1, col2 = st.columns(2)
+            crewai_placeholder = col1.empty()
+            autogen_placeholder = col2.empty()
 
             with st.spinner("Generating CrewAi Response..."):
-                with col1.container(border=True):
-                    response_crewai = generate_response("crewai")
+                with crewai_placeholder.container(border=True):
+                    response_crewai = generate_response("crewai", prompt, agent)
                     st.subheader("CrewAi Response:")
                     st.markdown(response_crewai, unsafe_allow_html=True)
                     st.session_state.messages.append({"role": "assistant", "content": response_crewai})
+                    save_conversation_history(st.session_state.messages)
 
             with st.spinner("Generating AutoGen Response..."):
-                with col2.container(border=True):
-                    response_autogen = generate_response("autogen")
+                with autogen_placeholder.container(border=True):
+                    response_autogen = generate_response("autogen", prompt, agent)
                     st.subheader("AutoGen Response:")
                     st.markdown(response_autogen, unsafe_allow_html=True)
                     st.session_state.messages.append({"role": "assistant", "content": response_autogen})
+                    save_conversation_history(st.session_state.messages)
 
             if agent == "Auto Generate New Agents":
                 try:
                     new_agent_filename = rename_and_move_yaml()
-                    st.toast(f"Generated agent file: {new_agent_filename}")
+                    st.toast(f":robot: Generated agent file: {new_agent_filename}")
                 except FileNotFoundError as e:
                     st.error(str(e))
+            st.rerun() 
 
         else:
             with st.spinner("Generating response..."):
-                response = generate_response(framework.lower())
+                response = generate_response(framework.lower(), prompt, agent)
                 st.markdown(response, unsafe_allow_html=True)
                 st.session_state.messages.append({"role": "assistant", "content": response})
+                save_conversation_history(st.session_state.messages)
 
                 if agent == "Auto Generate New Agents":
                     try:
                         new_agent_filename = rename_and_move_yaml()
-                        st.toast(f"Generated agent file: {new_agent_filename}")
+                        st.toast(f":robot: Generated agent file: {new_agent_filename}")
                     except FileNotFoundError as e:
                         st.error(str(e))
+                st.rerun()

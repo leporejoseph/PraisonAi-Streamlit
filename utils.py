@@ -1,9 +1,12 @@
 import os
 import yaml
+import json
 import streamlit as st
 from praisonai import PraisonAI
 from openai import OpenAI
 from config import AGENTS_DIR
+
+CONVERSATION_HISTORY_FILE = 'conversation_history.json'
 
 def initialize_env():
     default_values = {
@@ -50,7 +53,7 @@ def update_env(model_name, api_base, api_key):
         "OPENAI_API_KEY": api_key
     })
 
-    if model_name == "openai":
+    if model_name.lower() == "openai":
         env_vars["OPENAI_LLM_API_KEY"] = api_key
     else:
         env_vars[f"{model_name.upper()}_API_KEY"] = api_key
@@ -61,7 +64,7 @@ def update_env(model_name, api_base, api_key):
 
     os.environ.update(env_vars)
 
-    st.session_state.client = OpenAI(api_key=api_key, base_url=api_base)
+    st.session_state.client = OpenAI(api_key=env_vars["OPENAI_LLM_API_KEY"] if model_name.lower() == "openai" else api_key, base_url=api_base)
 
 def get_api_key(model_name):
     if model_name == "openai":
@@ -99,22 +102,47 @@ def load_yaml(file_path):
 
 def save_yaml(data, file_path):
     with open(file_path, 'w') as file:
-        yaml.safe_dump(data, file, sort_keys=False)
+        yaml.safe_dump(data, file, sort_keys=False, indent=4)
+
+def load_conversation_history():
+    if os.path.exists(CONVERSATION_HISTORY_FILE):
+        with open(CONVERSATION_HISTORY_FILE, 'r') as file:
+            return json.load(file)
+    return []
+
+def save_conversation_history(messages):
+    with open(CONVERSATION_HISTORY_FILE, 'w') as file:
+        json.dump(messages, file, indent=4)
+
+def clear_conversation_history():
+    with open(CONVERSATION_HISTORY_FILE, 'w') as file:
+        json.dump([], file, indent=4)
+    st.session_state.messages = []
+
+def load_selected_llm_provider():
+    if os.path.exists('config.json'):
+        with open('config.json', 'r') as file:
+            config = json.load(file)
+            return config.get('llm_model', 'OpenAi')
+    return 'OpenAi'
+
+def save_selected_llm_provider(llm_model):
+    config = {}
+    if os.path.exists('config.json'):
+        with open('config.json', 'r') as file:
+            config = json.load(file)
+    config['llm_model'] = llm_model
+    with open('config.json', 'w') as file:
+        json.dump(config, file, indent=4)
 
 def initialize_session_state():
-    st.session_state.setdefault('llm_model', 'OpenAi')
-    st.session_state.setdefault('client', OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE")))
+    if 'llm_model' not in st.session_state:
+        st.session_state['llm_model'] = load_selected_llm_provider()
+    if 'client' not in st.session_state:
+        st.session_state['client'] = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE"))
     if 'api_key' not in st.session_state:
         st.session_state.api_key = get_api_key(st.session_state.llm_model)
-    st.session_state.setdefault('show_edit_container', False)
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-def run_praison(framework, prompt, agent):
-    praison_ai_args = {
-        "framework": framework,
-        "auto": prompt if agent == "Auto Generate New Agents" else None,
-        "agent_file": f"{AGENTS_DIR}/{agent}" if agent != "Auto Generate New Agents" else None
-    }
-    praison_ai = PraisonAI(**{k: v for k, v in praison_ai_args.items() if v is not None})
-    return praison_ai.main()
+    if 'show_edit_container' not in st.session_state:
+        st.session_state['show_edit_container'] = False
+    if 'messages' not in st.session_state:
+        st.session_state['messages'] = load_conversation_history()

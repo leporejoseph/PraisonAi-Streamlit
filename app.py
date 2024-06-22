@@ -3,6 +3,7 @@
 from praisonai import PraisonAI
 from praisonai.agents_generator import AgentsGenerator
 from praisonai.auto import AutoGenerator
+import anthropic
 import streamlit as st
 import os
 import time
@@ -25,8 +26,6 @@ def update_model():
     st.session_state.api_key = get_api_key(st.session_state.llm_model)
     update_env(st.session_state.llm_model, st.session_state.api_base, st.session_state.api_key)
     save_selected_llm_provider(st.session_state.llm_model)
-
-test = st.empty()
 
 def generate_response(framework_name, prompt, agent):
     config_list = [
@@ -62,14 +61,24 @@ def generate_response(framework_name, prompt, agent):
             if message['role'] == 'user':
                 message['content'] += f"\nContext:\n{praison_ai_result}"
                 break
-            
-        stream = st.session_state.client.chat.completions.create(
-            model=st.session_state["model_name"],
-            messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
-            stream=True,
-        )
-        
-        response = st.write_stream(stream)
+
+        if st.session_state.llm_model.lower() == "anthropic":
+            stream = st.session_state.client.messages.stream(
+                model=st.session_state["model_name"],
+                messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+                max_tokens=1024,
+            )
+            response = ""
+            for text in stream.text_stream:
+                response += text
+        else:
+            stream = st.session_state.client.chat.completions.create(
+                model=st.session_state["model_name"],
+                messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+                stream=True,
+            )
+            response = st.write_stream(stream)
+
         st.session_state.messages.append({"role": "assistant", "content": response})
         save_conversation_history(st.session_state.messages)
 
@@ -236,12 +245,26 @@ if prompt := st.chat_input("Type your message here..."):
 
     with st.chat_message("assistant"):
         if framework.lower() == "none":
-            stream = st.session_state.client.chat.completions.create(
-                model=st.session_state["model_name"],
-                messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
-                stream=True,
-            )
-            response = st.write_stream(stream)
+            if st.session_state.llm_model.lower() == "anthropic":
+                client = anthropic.Anthropic()
+
+                stream_response = st.empty()
+                with client.messages.stream(
+                    max_tokens=1024,
+                    messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+                    model=st.session_state["model_name"],
+                ) as stream:
+                    response = ""
+                    for text in stream.text_stream:
+                        response += text
+                        stream_response.write(response)
+            else:
+                stream = st.session_state.client.chat.completions.create(
+                    model=st.session_state["model_name"],
+                    messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+                    stream=True,
+                )
+                response = st.write_stream(stream)
             st.session_state.messages.append({"role": "assistant", "content": response})
         elif framework.lower() == "battle":
             with st.spinner("Generating CrewAi Response..."):

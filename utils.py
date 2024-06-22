@@ -5,6 +5,7 @@ import yaml
 import json
 import streamlit as st
 from openai import OpenAI
+import anthropic
 from config import AGENTS_DIR, TOOLS_FILE
 import re
 
@@ -20,7 +21,8 @@ def initialize_env():
         "FASTCHAT_API_KEY": "NA",
         "LM_STUDIO_API_KEY": "NA",
         "MISTRAL_API_API_KEY": "Enter API Key Here",
-        "GROQ_API_KEY": "Enter API Key Here"
+        "GROQ_API_KEY": "Enter API Key Here",
+        "ANTHROPIC_API_KEY": "Enter API Key Here"
     }
 
     env_path = '.env'
@@ -55,10 +57,11 @@ def update_env(model_name, api_base, api_key):
         "OPENAI_API_KEY": api_key
     })
 
+    model_key = model_name.upper().replace(' ', '_') + "_API_KEY"
     if model_name.lower() == "openai":
         env_vars["OPENAI_LLM_API_KEY"] = api_key
     else:
-        env_vars[f"{model_name.upper()}_API_KEY"] = api_key
+        env_vars[model_key] = api_key
 
     with open(env_path, 'w') as file:
         for key, value in env_vars.items():
@@ -66,12 +69,16 @@ def update_env(model_name, api_base, api_key):
 
     os.environ.update(env_vars)
 
-    st.session_state.client = OpenAI(api_key=env_vars["OPENAI_LLM_API_KEY"] if model_name.lower() == "openai" else api_key, base_url=api_base)
+    if model_name.lower() == "anthropic":
+        st.session_state.client = anthropic.Anthropic(api_key=env_vars["ANTHROPIC_API_KEY"])
+    else:
+        st.session_state.client = OpenAI(api_key=env_vars["OPENAI_LLM_API_KEY"] if model_name.lower() == "openai" else api_key, base_url=api_base)
 
 def get_api_key(model_name):
+    model_key = model_name.upper().replace(' ', '_') + "_API_KEY"
     if model_name.lower() == "openai":
         return os.getenv("OPENAI_LLM_API_KEY", "Enter API Key Here")
-    return os.getenv(f"{model_name.upper()}_API_KEY", "NA" if model_name in ["ollama_mistral", "fastchat", "lm_studio"] else "Enter API Key Here")
+    return os.getenv(model_key, "NA" if model_name in ["ollama_mistral", "fastchat", "lm_studio"] else "Enter API Key Here")
 
 def get_agents_list():
     agents_dir = 'agents'
@@ -140,7 +147,10 @@ def initialize_session_state():
     if 'llm_model' not in st.session_state:
         st.session_state['llm_model'] = load_selected_llm_provider()
     if 'client' not in st.session_state:
-        st.session_state['client'] = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE"))
+        if st.session_state.llm_model.lower() == "anthropic":
+            st.session_state['client'] = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        else:
+            st.session_state['client'] = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE"))
     if 'api_key' not in st.session_state:
         st.session_state.api_key = get_api_key(st.session_state.llm_model)
     if 'show_edit_container' not in st.session_state:

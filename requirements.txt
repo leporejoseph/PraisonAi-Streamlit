@@ -1,3 +1,4 @@
 streamlit
 praisonai
 praisonai[crewai-tools]
+anthropic

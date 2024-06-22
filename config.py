@@ -1,5 +1,3 @@
-# config.py
-
 MODEL_SETTINGS = {
     "OpenAi": {
         "OPENAI_MODEL_NAME": "gpt-4o",
@@ -24,6 +22,10 @@ MODEL_SETTINGS = {
     "Groq": {
         "OPENAI_MODEL_NAME": "llama3-70b-8192",
         "OPENAI_API_BASE": "https://api.groq.com/openai/v1",
+    },
+    "Anthropic": {
+        "OPENAI_MODEL_NAME": "claude-3-5-sonnet-20240620",
+        "OPENAI_API_BASE": "https://api.anthropic.com/v1",
     }
 }
 

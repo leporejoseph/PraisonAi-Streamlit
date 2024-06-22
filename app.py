@@ -1,9 +1,18 @@
 # app.py
 
 from praisonai import PraisonAI
+from praisonai.agents_generator import AgentsGenerator
+from praisonai.auto import AutoGenerator
 import streamlit as st
-from utils import update_env, get_agents_list, get_api_key, initialize_env, rename_and_move_yaml, load_yaml, save_yaml, initialize_session_state, save_conversation_history, clear_conversation_history, save_selected_llm_provider
-from config import MODEL_SETTINGS, FRAMEWORK_OPTIONS, DEFAULT_FRAMEWORK, AGENTS_DIR, AVAILABLE_TOOLS
+import os
+import time
+from utils import (
+    update_env, get_agents_list, get_api_key, initialize_env, rename_and_move_yaml, load_yaml, 
+    save_yaml, initialize_session_state, save_conversation_history, clear_conversation_history, 
+    save_selected_llm_provider, load_tools_from_file, save_tool_to_file, edit_tool_in_file, 
+    delete_tool_from_file, load_tool_class_definition
+)
+from config import MODEL_SETTINGS, FRAMEWORK_OPTIONS, DEFAULT_FRAMEWORK, AGENTS_DIR, TOOLS_FILE, AVAILABLE_TOOLS
 
 # Set Streamlit to wide mode
 st.set_page_config(layout="wide")
@@ -17,21 +26,65 @@ def update_model():
     update_env(st.session_state.llm_model, st.session_state.api_base, st.session_state.api_key)
     save_selected_llm_provider(st.session_state.llm_model)
 
+test = st.empty()
+
 def generate_response(framework_name, prompt, agent):
-    praison_ai_args = {
-        "framework": framework_name,
-        "auto": prompt if agent == "Auto Generate New Agents" else None,
-        "agent_file": "test.yaml" if framework_name == "crewai" else f"{AGENTS_DIR}/{agent}" if agent != "Auto Generate New Agents" else None
-    }
-    praison_ai = PraisonAI(**{k: v for k, v in praison_ai_args.items() if v is not None})
-    return praison_ai.main()
+    config_list = [
+        {
+            'model': st.session_state.model_name,
+            'base_url': st.session_state.api_base,
+            'api_key': st.session_state.api_key
+        }
+    ]
+
+    if agent == "Auto Generate New Agents":
+        existing_files = [f for f in os.listdir(AGENTS_DIR) if f.endswith('.yaml')]
+        new_file_number = len(existing_files) + 1
+        agent_file_path = f"{AGENTS_DIR}/Agents_{new_file_number}.yaml"
+
+        generator = AutoGenerator(topic=prompt, agent_file=agent_file_path, framework=framework_name)
+        agent_file = generator.generate()
+        agents_generator = AgentsGenerator(agent_file, framework_name, config_list)
+        response = agents_generator.generate_crew_and_kickoff()
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        save_conversation_history(st.session_state.messages)
+        return response
+    
+    else:
+        agent_file_path = f"{AGENTS_DIR}/{agent}"
+
+        # Call PraisonAI and get the results
+        praison_ai = PraisonAI(agent_file=agent_file_path, framework=framework_name)
+        praison_ai_result = praison_ai.main()
+
+        # Find the latest user message
+        for message in reversed(st.session_state.messages):
+            if message['role'] == 'user':
+                message['content'] += f"\nContext:\n{praison_ai_result}"
+                break
+            
+        stream = st.session_state.client.chat.completions.create(
+            model=st.session_state["model_name"],
+            messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+            stream=True,
+        )
+        
+        response = st.write_stream(stream)
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        save_conversation_history(st.session_state.messages)
+
+        return response
 
 @st.experimental_dialog("Edit Agents", width="large")
 def edit_agent_dialog():
     yaml_data = load_yaml(f"{AGENTS_DIR}/{agent}")
     roles = yaml_data.get("roles", {})
     updated_roles = {}
-    
+
+    # Load custom tools
+    custom_tools = load_tools_from_file(TOOLS_FILE).keys()
+    all_tools = sorted(set(AVAILABLE_TOOLS + list(custom_tools)))
+
     topic = st.text_area("Topic", value=yaml_data.get("topic", ""), height=150)
 
     col1, col2 = st.columns(2)
@@ -42,8 +95,8 @@ def edit_agent_dialog():
         col_idx += 1
         with col.container(border=True):
             st.subheader(f"{role_data.get('role', '')}")
-            default_tools = [tool for tool in role_data.get("tools", []) if tool in AVAILABLE_TOOLS]
-            tools = st.multiselect("Tools", options=AVAILABLE_TOOLS, default=default_tools, key=f"tools_{role_name}")
+            default_tools = [tool for tool in role_data.get("tools", []) if tool in all_tools]
+            tools = st.multiselect("Tools", options=all_tools, default=default_tools, key=f"tools_{role_name}")
             role = st.text_input("Role", value=role_data.get("role", ""), key=f"role_{role_name}")
             backstory = st.text_area("Backstory", value=role_data.get("backstory", ""), key=f"backstory_{role_name}")
             goal = st.text_area("Goal", value=role_data.get("goal", ""), key=f"goal_{role_name}")
@@ -75,6 +128,57 @@ def edit_agent_dialog():
         st.session_state.show_edit_container = False
         st.rerun()
 
+@st.experimental_dialog("Create New Tool", width="large")
+def create_tool_dialog():
+    class_definition = st.text_area("Tool Class Definition", height=500)
+
+    if st.button("Save"):
+        if class_definition:
+            tool_name = class_definition.split('class ')[1].split('(')[0].strip()
+            tool_code = f"# {tool_name}\n{class_definition}\n# {tool_name}"
+            append_tool_to_file(tool_code)
+            st.toast(f"Tool '{tool_name}' has been created.")
+            st.session_state.tools[tool_name] = tool_code
+            st.session_state.show_create_tool_dialog = False
+            st.rerun()
+
+    if st.button("Cancel"):
+        st.session_state.show_create_tool_dialog = False
+        st.rerun()
+
+def append_tool_to_file(tool_code):
+    with open(TOOLS_FILE, 'a') as file:
+        file.write(f"\n{tool_code}\n")
+
+@st.experimental_dialog("Edit Tool", width="large")
+def edit_tool_dialog(tool_name):
+    class_definition = load_tool_class_definition(tool_name)
+    start_comment = f"# {tool_name}"
+    end_comment = f"# {tool_name}"
+    start_idx = class_definition.find(start_comment) + len(start_comment)
+    end_idx = class_definition.find(end_comment, start_idx)
+    code_to_edit = class_definition[start_idx:end_idx].strip()
+
+    updated_class_definition = st.text_area("Tool Class Definition", value=code_to_edit, height=500)
+
+    if st.button("Save"):
+        new_tool_code = f"{start_comment}\n{updated_class_definition}\n{end_comment}"
+        edit_tool_in_file(tool_name, new_tool_code)
+        st.toast(f"Tool '{tool_name}' has been updated.")
+        st.session_state.show_edit_tool_dialog = False
+        st.rerun()
+
+    if st.button("Delete"):
+        delete_tool_from_file(tool_name)
+        st.toast(f"Tool '{tool_name}' has been deleted.")
+        st.session_state.show_edit_tool_dialog = False
+        st.rerun()
+
+    if st.button("Cancel"):
+        st.session_state.show_edit_tool_dialog = False
+        st.rerun()
+
+# Sidebar configuration
 with st.sidebar:
     st.title("PraisonAI Chatbot")
     with st.expander("LLM Settings", expanded=True):
@@ -100,6 +204,23 @@ with st.sidebar:
                         edit_agent_dialog()
         else:
             agent = None
+    
+    with st.expander("Custom Tools", expanded=True):
+        if st.button("Create New Tool"):
+            st.session_state.show_create_tool_dialog = True
+
+        tools = load_tools_from_file(TOOLS_FILE)
+        for tool_name in sorted(tools.keys()):
+            if st.button(tool_name.replace('_', ' ')):
+                st.session_state.selected_tool = tool_name
+                st.session_state.show_edit_tool_dialog = True
+
+# Handle dialog state outside of sidebar to ensure it runs in the main context
+if 'show_edit_tool_dialog' in st.session_state and st.session_state.show_edit_tool_dialog:
+    edit_tool_dialog(st.session_state.selected_tool)
+
+if 'show_create_tool_dialog' in st.session_state and st.session_state.show_create_tool_dialog:
+    create_tool_dialog()
 
 update_env(st.session_state.llm_model, st.session_state.api_base, st.session_state.api_key)
 
@@ -122,48 +243,17 @@ if prompt := st.chat_input("Type your message here..."):
             )
             response = st.write_stream(stream)
             st.session_state.messages.append({"role": "assistant", "content": response})
-            save_conversation_history(st.session_state.messages)
-
         elif framework.lower() == "battle":
-            col1, col2 = st.columns(2)
-            crewai_placeholder = col1.empty()
-            autogen_placeholder = col2.empty()
-
             with st.spinner("Generating CrewAi Response..."):
-                with crewai_placeholder.container(border=True):
-                    response_crewai = generate_response("crewai", prompt, agent)
-                    st.subheader("CrewAi Response:")
-                    st.markdown(response_crewai, unsafe_allow_html=True)
-                    st.session_state.messages.append({"role": "assistant", "content": response_crewai})
-                    save_conversation_history(st.session_state.messages)
+                response_crewai = generate_response("crewai", prompt, agent)
+                st.session_state.messages.append({"role": "assistant", "content": response_crewai})
 
             with st.spinner("Generating AutoGen Response..."):
-                with autogen_placeholder.container(border=True):
-                    response_autogen = generate_response("autogen", prompt, agent)
-                    st.subheader("AutoGen Response:")
-                    st.markdown(response_autogen, unsafe_allow_html=True)
-                    st.session_state.messages.append({"role": "assistant", "content": response_autogen})
-                    save_conversation_history(st.session_state.messages)
-
-            if agent == "Auto Generate New Agents":
-                try:
-                    new_agent_filename = rename_and_move_yaml()
-                    st.toast(f":robot: Generated agent file: {new_agent_filename}")
-                except FileNotFoundError as e:
-                    st.error(str(e))
-            st.rerun() 
-
+                response_autogen = generate_response("autogen", prompt, agent)
+                st.session_state.messages.append({"role": "assistant", "content": response_autogen})
         else:
             with st.spinner("Generating response..."):
                 response = generate_response(framework.lower(), prompt, agent)
-                st.markdown(response, unsafe_allow_html=True)
-                st.session_state.messages.append({"role": "assistant", "content": response})
-                save_conversation_history(st.session_state.messages)
 
-                if agent == "Auto Generate New Agents":
-                    try:
-                        new_agent_filename = rename_and_move_yaml()
-                        st.toast(f":robot: Generated agent file: {new_agent_filename}")
-                    except FileNotFoundError as e:
-                        st.error(str(e))
-                st.rerun()
+        save_conversation_history(st.session_state.messages)
+        st.rerun()

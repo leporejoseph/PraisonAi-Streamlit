@@ -31,6 +31,7 @@ FRAMEWORK_OPTIONS = ["None", "AutoGen", "CrewAi", "Battle"]
 DEFAULT_FRAMEWORK = "None"
 DEFAULT_AGENT = "Auto"
 AGENTS_DIR = "agents"
+TOOLS_FILE = "tools.py"
 
 AVAILABLE_TOOLS = [
     'CodeDocsSearchTool', 'CSVSearchTool', 'DirectorySearchTool', 'DOCXSearchTool', 

@@ -8,24 +8,34 @@ import streamlit as st
 import os
 import time
 from utils import (
-    update_env, get_agents_list, get_api_key, initialize_env, rename_and_move_yaml, load_yaml, 
+    update_env, get_agents_list, get_api_key, initialize_env, load_yaml, 
     save_yaml, initialize_session_state, save_conversation_history, clear_conversation_history, 
-    save_selected_llm_provider, load_tools_from_file, save_tool_to_file, edit_tool_in_file, 
-    delete_tool_from_file, load_tool_class_definition
+    save_selected_llm_provider, load_tools_from_file, edit_tool_in_file, 
+    delete_tool_from_file, load_tool_class_definition, is_local_model
 )
 from config import MODEL_SETTINGS, FRAMEWORK_OPTIONS, DEFAULT_FRAMEWORK, AGENTS_DIR, TOOLS_FILE, AVAILABLE_TOOLS
 
 # Set Streamlit to wide mode
-st.set_page_config(layout="wide")
+st.set_page_config(
+    layout="wide",
+    page_title="PraisonAI Chatbot",
+    page_icon=":material/robot:"
+)
 
 # Initialize the .env file with default values if not present
 initialize_env()
 initialize_session_state()
 
 def update_model():
-    st.session_state.api_key = get_api_key(st.session_state.llm_model)
-    update_env(st.session_state.llm_model, st.session_state.api_base, st.session_state.api_key)
-    save_selected_llm_provider(st.session_state.llm_model)
+    model_name = st.session_state.llm_model
+    if model_name == "Local":
+        model_name = st.session_state.local_model
+        save_selected_llm_provider("Local")  # Save "Local" instead of the specific local model name
+    else:
+        save_selected_llm_provider(model_name)
+
+    st.session_state.api_key = get_api_key(model_name)
+    update_env(model_name, st.session_state.api_base, st.session_state.api_key)
 
 def generate_response(framework_name, prompt, agent):
     config_list = [
@@ -187,17 +197,50 @@ def edit_tool_dialog(tool_name):
         st.session_state.show_edit_tool_dialog = False
         st.rerun()
 
-# Sidebar configuration
+# Sidebar Configuration
 with st.sidebar:
     st.title("PraisonAI Chatbot")
+
     with st.expander("LLM Settings", expanded=True):
-        st.selectbox("Select LLM Provider", options=sorted(MODEL_SETTINGS.keys()), key='llm_model', on_change=update_model)
-        st.text_input("API Base", value=MODEL_SETTINGS[st.session_state.llm_model]["OPENAI_API_BASE"], key='api_base')
-        st.text_input("Model", value=MODEL_SETTINGS[st.session_state.llm_model]["OPENAI_MODEL_NAME"], key='model_name')
+        col1, col2 = st.columns([2, 1])
+
+        # Create LLM options dynamically
+        llm_providers = list(MODEL_SETTINGS.keys())
+        local_options = sorted([provider for provider in llm_providers if is_local_model(provider)])
+        llm_options = ["OpenAi", "Anthropic", "Mistral", "Groq", "Local"]
+
+        llm_selection_placeholder = col1.empty()
+        local_model_placeholder = col2.empty()
+
+        llm_selection_placeholder.selectbox(
+            "Select LLM Provider",
+            options=llm_options,
+            key='llm_model',
+            on_change=update_model
+        )
+
+        if st.session_state.llm_model == "Local":
+            local_model_placeholder.selectbox(
+                "Provider",
+                options=local_options,
+                index=local_options.index("LM Studio"),  # Default selection
+                key='local_model',
+                on_change=update_model
+            )
+            selected_model = st.session_state.local_model
+        else:
+            selected_model = st.session_state.llm_model
+
+        # Handle KeyError when model is not found in MODEL_SETTINGS
+        model_settings = MODEL_SETTINGS.get(selected_model, MODEL_SETTINGS["OpenAi"])
+
+        st.text_input("API Base", value=model_settings["OPENAI_API_BASE"], key='api_base')
+        st.text_input("Model", value=model_settings["OPENAI_MODEL_NAME"], key='model_name')
         st.text_input("API Key", value=st.session_state.api_key, key='api_key', type="password")
+
         if st.button("Clear Chat"):
             clear_conversation_history()
-    
+
     with st.expander("Agent Settings", expanded=True):
         framework = st.selectbox("Agentic Framework", options=FRAMEWORK_OPTIONS, index=FRAMEWORK_OPTIONS.index(DEFAULT_FRAMEWORK))
         if framework != "None":
@@ -213,7 +256,7 @@ with st.sidebar:
                         edit_agent_dialog()
         else:
             agent = None
-    
+
     with st.expander("Custom Tools", expanded=True):
         if st.button("Create New Tool"):
             st.session_state.show_create_tool_dialog = True
@@ -231,7 +274,8 @@ if 'show_edit_tool_dialog' in st.session_state and st.session_state.show_edit_to
 if 'show_create_tool_dialog' in st.session_state and st.session_state.show_create_tool_dialog:
     create_tool_dialog()
 
-update_env(st.session_state.llm_model, st.session_state.api_base, st.session_state.api_key)
+selected_model_name = st.session_state.get('local_model') if st.session_state.llm_model == "Local" else st.session_state.llm_model
+update_env(selected_model_name, st.session_state.api_base, st.session_state.api_key)
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):

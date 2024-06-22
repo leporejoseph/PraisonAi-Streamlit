@@ -6,7 +6,7 @@ import json
 import streamlit as st
 from openai import OpenAI
 import anthropic
-from config import AGENTS_DIR, TOOLS_FILE
+from config import AGENTS_DIR, TOOLS_FILE, MODEL_SETTINGS
 import re
 
 CONVERSATION_HISTORY_FILE = 'conversation_history.json'
@@ -17,9 +17,9 @@ def initialize_env():
         "OPENAI_API_BASE": "Enter API Base Here",
         "OPENAI_API_KEY": "Enter API Key Here",
         "OPENAI_LLM_API_KEY": "Enter API Key Here",
-        "OLLAMA_MISTRAL_API_KEY": "NA",
-        "FASTCHAT_API_KEY": "NA",
-        "LM_STUDIO_API_KEY": "NA",
+        "OLLAMA_MISTRAL_API_KEY": "OPTIONAL",
+        "FASTCHAT_API_KEY": "OPTIONAL",
+        "LM_STUDIO_API_KEY": "OPTIONAL",
         "MISTRAL_API_API_KEY": "Enter API Key Here",
         "GROQ_API_KEY": "Enter API Key Here",
         "ANTHROPIC_API_KEY": "Enter API Key Here"
@@ -89,21 +89,6 @@ def get_agents_list():
 
     return agents_files
 
-def rename_and_move_yaml():
-    agents_dir = 'agents'
-    if not os.path.exists(agents_dir):
-        os.makedirs(agents_dir)
-    
-    existing_agents = [f for f in os.listdir(agents_dir) if f.startswith('agent_') and f.endswith('.yaml')]
-    new_agent_number = len(existing_agents) + 1
-    new_agent_filename = f'agent_{new_agent_number}.yaml'
-
-    if os.path.exists('test.yaml'):
-        os.rename('test.yaml', os.path.join(agents_dir, new_agent_filename))
-        return new_agent_filename
-    else:
-        raise FileNotFoundError("The file 'test.yaml' does not exist.")
-
 def load_yaml(file_path):
     with open(file_path, 'r') as file:
         return yaml.safe_load(file)
@@ -139,7 +124,9 @@ def save_selected_llm_provider(llm_model):
     if os.path.exists('config.json'):
         with open('config.json', 'r') as file:
             config = json.load(file)
-    config['llm_model'] = llm_model
+    
+    config['llm_model'] = 'Local' if st.session_state.llm_model == 'Local' else llm_model
+    
     with open('config.json', 'w') as file:
         json.dump(config, file, indent=4)
 
@@ -159,6 +146,8 @@ def initialize_session_state():
         st.session_state['tools'] = load_tools_from_file(TOOLS_FILE)
     if 'messages' not in st.session_state:
         st.session_state['messages'] = load_conversation_history()
+    if 'local_model' not in st.session_state:
+        st.session_state['local_model'] = "LM Studio"
 
 def load_tools_from_file(tools_file):
     if not os.path.exists(tools_file):
@@ -182,59 +171,6 @@ def load_tools_from_file(tools_file):
             tools[class_name] = f"# {tool_name}\n{class_def}"
 
     return tools
-
-def save_tool_to_file(name, class_definition):
-    if not os.path.exists(TOOLS_FILE):
-        with open(TOOLS_FILE, 'w') as file:
-            file.write('#tools.py\n\n\n')
-
-    with open(TOOLS_FILE, 'r') as file:
-        content = file.readlines()
-
-    # Extract existing imports
-    existing_imports = []
-    for line in content:
-        if line.strip().startswith('from') or line.strip().startswith('import'):
-            existing_imports.append(line.strip())
-
-    # Extract new imports from class_definition
-    new_imports = []
-    class_lines = []
-    for line in class_definition.split('\n'):
-        if line.strip().startswith('from') or line.strip().startswith('import'):
-            new_imports.append(line.strip())
-        else:
-            class_lines.append(line)
-
-    # Combine and deduplicate imports
-    all_imports = sorted(set(existing_imports + new_imports))
-
-    # Prepare new content
-    new_content = ['#tools.py\n\n\n']
-    new_content.extend(f'{imp}\n' for imp in all_imports)
-    if all_imports:
-        new_content.append('\n')
-
-    # Add existing tools
-    tool_started = False
-    for line in content:
-        if line.strip().startswith('# ') and not tool_started:
-            tool_started = True
-            new_content.append(line)
-        elif line.strip().startswith('# ') and tool_started:
-            new_content.append(line)
-            tool_started = False
-        elif tool_started and not (line.strip().startswith('from') or line.strip().startswith('import')):
-            new_content.append(line)
-
-    # Add the new tool
-    new_content.append(f'\n# {name}\n')
-    new_content.extend(f'{line}\n' for line in class_lines)
-    new_content.append(f'# {name}\n')
-
-    # Write the updated content back to the file
-    with open(TOOLS_FILE, 'w') as file:
-        file.writelines(new_content)
 
 def edit_tool_in_file(tool_name, new_tool_code):
     with open(TOOLS_FILE, 'r') as file:
@@ -271,3 +207,5 @@ def delete_tool_from_file(tool_name):
     with open(TOOLS_FILE, 'w') as file:
         file.write(new_content.strip() + '\n')  # Ensure file ends with a newline
 
+def is_local_model(model_name):
+    return 'localhost' in MODEL_SETTINGS[model_name]['OPENAI_API_BASE']

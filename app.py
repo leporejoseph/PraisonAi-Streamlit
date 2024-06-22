@@ -13,7 +13,7 @@ from utils import (
     save_selected_llm_provider, load_tools_from_file, edit_tool_in_file, 
     delete_tool_from_file, load_tool_class_definition, is_local_model
 )
-from config import MODEL_SETTINGS, FRAMEWORK_OPTIONS, DEFAULT_FRAMEWORK, AGENTS_DIR, TOOLS_FILE, AVAILABLE_TOOLS
+from config import MODEL_SETTINGS, FRAMEWORK_OPTIONS, DEFAULT_FRAMEWORK, AGENTS_DIR, TOOLS_FILE, AVAILABLE_TOOLS, DEFAULT_TOOL_CLASS_DEFINITION
 
 # Set Streamlit to wide mode
 st.set_page_config(
@@ -149,7 +149,7 @@ def edit_agent_dialog():
 
 @st.experimental_dialog("Create New Tool", width="large")
 def create_tool_dialog():
-    class_definition = st.text_area("Tool Class Definition", height=500)
+    class_definition = st.text_area("Tool Class Definition", height=500, placeholder=DEFAULT_TOOL_CLASS_DEFINITION)
 
     if st.button("Save"):
         if class_definition:

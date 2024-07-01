@@ -8,6 +8,16 @@ from openai import OpenAI
 import anthropic
 from config import AGENTS_DIR, TOOLS_FILE, MODEL_SETTINGS
 import re
+from datetime import datetime
+from groq import Groq
+from interpreter import OpenInterpreter
+from PIL import Image
+from io import BytesIO
+import base64
+from random import randint
+
+import asyncio
+import edge_tts
 
 CONVERSATION_HISTORY_FILE = 'conversation_history.json'
 
@@ -41,9 +51,6 @@ def initialize_env():
     os.environ.update(env_vars)
 
 def update_env(model_name, api_base, api_key):
-    from config import MODEL_SETTINGS
-    settings = MODEL_SETTINGS[model_name]
-
     env_path = '.env'
     env_vars = {}
 
@@ -52,16 +59,10 @@ def update_env(model_name, api_base, api_key):
             env_vars = dict(line.strip().split('=', 1) for line in file if '=' in line)
 
     env_vars.update({
-        "OPENAI_MODEL_NAME": settings["OPENAI_MODEL_NAME"],
+        "OPENAI_MODEL_NAME": model_name,
         "OPENAI_API_BASE": api_base,
         "OPENAI_API_KEY": api_key
     })
-
-    model_key = model_name.upper().replace(' ', '_') + "_API_KEY"
-    if model_name.lower() == "openai":
-        env_vars["OPENAI_LLM_API_KEY"] = api_key
-    else:
-        env_vars[model_key] = api_key
 
     with open(env_path, 'w') as file:
         for key, value in env_vars.items():
@@ -69,10 +70,45 @@ def update_env(model_name, api_base, api_key):
 
     os.environ.update(env_vars)
 
-    if model_name.lower() == "anthropic":
-        st.session_state.client = anthropic.Anthropic(api_key=env_vars["ANTHROPIC_API_KEY"])
+    # Initialize the client based on the model
+    if st.session_state.llm_model.lower() == "anthropic":
+        st.session_state.client = anthropic.Anthropic(api_key=env_vars.get("ANTHROPIC_API_KEY"))
     else:
-        st.session_state.client = OpenAI(api_key=env_vars["OPENAI_LLM_API_KEY"] if model_name.lower() == "openai" else api_key, base_url=api_base)
+        st.session_state.client = OpenAI(api_key=env_vars.get("OPENAI_API_KEY"), base_url=api_base)
+
+def update_model_settings(llm_provider, model_name, api_base):
+    config_path = 'config.py'
+
+    with open(config_path, 'r') as file:
+        lines = file.readlines()
+
+    new_lines = []
+    in_model_section = False
+
+    for line in lines:
+        if f'"{llm_provider}":' in line:
+            in_model_section = True
+        if in_model_section and 'OPENAI_MODEL_NAME' in line:
+            new_lines.append(f'        "OPENAI_MODEL_NAME": "{model_name}",\n')
+            continue
+        if in_model_section and 'OPENAI_API_BASE' in line:
+            new_lines.append(f'        "OPENAI_API_BASE": "{api_base}",\n')
+            in_model_section = False
+            continue
+        new_lines.append(line)
+
+    with open(config_path, 'w') as file:
+        file.writelines(new_lines)
+
+def save_config(value, key):
+    config = {}
+    config_path = 'config.json'
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as file:
+            config = json.load(file)
+    config[key] = value
+    with open(config_path, 'w') as file:
+        json.dump(config, file, indent=4)
 
 def get_api_key(model_name):
     model_key = model_name.upper().replace(' ', '_') + "_API_KEY"
@@ -81,12 +117,9 @@ def get_api_key(model_name):
     return os.getenv(model_key, "NA" if model_name in ["ollama_mistral", "fastchat", "lm_studio"] else "Enter API Key Here")
 
 def get_agents_list():
-    agents_dir = 'agents'
-    agents_files = ["Auto Generate New Agents"]
-
-    if os.path.exists(agents_dir):
-        agents_files.extend(f for f in os.listdir(agents_dir) if f.endswith('.yaml'))
-
+    agents_files = []
+    if os.path.exists(AGENTS_DIR):
+        agents_files.extend(f for f in os.listdir(AGENTS_DIR) if f.endswith('.yaml'))
     return agents_files
 
 def load_yaml(file_path):
@@ -116,17 +149,15 @@ def load_selected_llm_provider():
     if os.path.exists('config.json'):
         with open('config.json', 'r') as file:
             config = json.load(file)
-            return config.get('llm_model', 'OpenAi')
+            return config.get('llm_provider', 'OpenAi')
     return 'OpenAi'
 
-def save_selected_llm_provider(llm_model):
+def save_selected_llm_provider(llm_provider):
     config = {}
     if os.path.exists('config.json'):
         with open('config.json', 'r') as file:
             config = json.load(file)
-    
-    config['llm_model'] = 'Local' if st.session_state.llm_model == 'Local' else llm_model
-    
+    config['llm_provider'] = 'Local' if st.session_state.llm_model == 'Local' else llm_provider
     with open('config.json', 'w') as file:
         json.dump(config, file, indent=4)
 
@@ -147,7 +178,27 @@ def initialize_session_state():
     if 'messages' not in st.session_state:
         st.session_state['messages'] = load_conversation_history()
     if 'local_model' not in st.session_state:
-        st.session_state['local_model'] = "LM Studio"
+        st.session_state.local_model = "LM Studio"
+    if 'api_base' not in st.session_state:
+        st.session_state.api_base = os.getenv("OPENAI_API_BASE")
+    if 'model_name' not in st.session_state:
+        st.session_state.model_name = os.getenv("OPENAI_MODEL_NAME")
+    if 'enable_tts' not in st.session_state:
+        st.session_state.enable_tts = True
+    if 'widget_key' not in st.session_state:
+        st.session_state.widget_key = str(randint(1000, 100000000))
+    if 'config_list' not in st.session_state:
+        st.session_state.config_list = [{
+            'model': st.session_state.model_name,
+            'base_url': st.session_state.api_base,
+            'api_key': st.session_state.api_key,
+            'api_type': st.session_state.llm_model.lower()
+        }]
+    if 'open_interpreter' not in st.session_state:
+        st.session_state.open_interpreter = OpenInterpreter()
+        st.session_state.open_interpreter.llm.model = st.session_state.model_name
+        st.session_state.open_interpreter.llm.api_base = st.session_state.api_base
+        st.session_state.open_interpreter.llm.api_key = st.session_state.api_key
 
 def load_tools_from_file(tools_file):
     if not os.path.exists(tools_file):
@@ -157,55 +208,132 @@ def load_tools_from_file(tools_file):
     tools = {}
     with open(tools_file, 'r') as file:
         content = file.read()
-        
-    # Split the content by tool definitions
-    tool_definitions = content.split('# ')[1:]  # Skip the first split which is likely imports
+
+    # Use regular expressions to find all class definitions in the file
+    import re
+    pattern = re.compile(r'class\s+(\w+)\s*\((BaseTool|.*)\):')
+    matches = pattern.findall(content)
     
-    for definition in tool_definitions:
-        lines = definition.strip().split('\n')
-        tool_name = lines[0].strip()  # The tool name is the first line after '#'
-        class_def = '\n'.join(lines[1:]).strip()  # The rest is the class definition
-        
-        if 'class' in class_def:
-            class_name = class_def.split('class ')[1].split('(')[0].strip()
-            tools[class_name] = f"# {tool_name}\n{class_def}"
-
+    for match in matches:
+        class_name = match[0]
+        tools[class_name] = content.split(f'class {class_name}(')[1].split('\n')[0]
+    
     return tools
-
-def edit_tool_in_file(tool_name, new_tool_code):
-    with open(TOOLS_FILE, 'r') as file:
-        content = file.read()
-
-    # Define the regex pattern to find the specific tool block
-    pattern = re.compile(rf"(# {tool_name}\n).*?(# {tool_name}\n)", re.DOTALL)
-
-    # Replace the old tool code with the new tool code
-    new_content = re.sub(pattern, new_tool_code, content)
-
-    with open(TOOLS_FILE, 'w') as file:
-        file.write(new_content)
-
-def load_tool_class_definition(tool_name):
-    with open(TOOLS_FILE, 'r') as file:
-        content = file.read()
-
-    tool_definitions = content.split(f'# {tool_name}')
-    if len(tool_definitions) >= 3:
-        return f"# {tool_name}{tool_definitions[1]}# {tool_name}"
-    return ""  # Return empty string if tool not found
-
-def delete_tool_from_file(tool_name):
-    with open(TOOLS_FILE, 'r') as file:
-        content = file.read()
-
-    # Define the regex pattern to find the specific tool block including comments
-    pattern = re.compile(rf"# {tool_name}\n.*?# {tool_name}\n", re.DOTALL)
-
-    # Remove the tool block
-    new_content = re.sub(pattern, '', content)
-
-    with open(TOOLS_FILE, 'w') as file:
-        file.write(new_content.strip() + '\n')  # Ensure file ends with a newline
 
 def is_local_model(model_name):
     return 'localhost' in MODEL_SETTINGS[model_name]['OPENAI_API_BASE']
+
+def transcribe_audio(uploaded_file):
+    client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+    transcription = client.audio.transcriptions.create(
+        file=(uploaded_file.name, uploaded_file.getvalue()),
+        model="whisper-large-v3",
+        response_format="verbose_json"
+    )
+    return transcription
+
+def save_transcription_to_file(transcription, original_filename):
+    directory = "documents"
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    timestamp = datetime.now().strftime("%m_%d_%Y_%H%M%S")
+    filename_without_ext = os.path.splitext(original_filename)[0]
+    filepath = os.path.join(directory, f"{filename_without_ext}_{timestamp}.json")
+
+    filtered_transcription = {
+        "text": transcription.text,
+        "segments": [
+            {
+                "start": segment['start'],
+                "end": segment['end'],
+                "text": segment['text']
+            }
+            for segment in transcription.segments
+        ]
+    }
+
+    with open(filepath, 'w') as f:
+        json.dump(filtered_transcription, f, indent=4)
+
+def documents_exist(directory="documents"):
+    return os.path.exists(directory) and len(os.listdir(directory)) > 0
+
+def list_documents(directory="documents"):
+    if documents_exist(directory):
+        return os.listdir(directory)
+    return []
+
+def load_document_content(filepath):
+    with open(filepath, 'r') as file:
+        content = json.load(file)
+    return content.get("text", "")
+
+def update_document_content(filepath, new_content):
+    with open(filepath, 'r') as file:
+        content = json.load(file)
+    content["text"] = new_content
+    with open(filepath, 'w') as file:
+        json.dump(content, file, indent=4)
+
+
+def format_response(chunk, full_response):
+    if chunk['type'] == "message":
+        full_response += chunk.get("content", "")
+        if chunk.get('end', False):
+            full_response += "\n"
+
+    if chunk['type'] == "code":
+        if chunk.get('start', False):
+            full_response += "```python\n"
+        full_response += chunk.get('content', '')
+        if chunk.get('end', False):
+            full_response += "\n```\n"
+
+    if chunk['type'] == "confirmation":
+        if chunk.get('start', False):
+            full_response += "```python\n"
+        full_response += chunk.get('content', {}).get('code', '')
+        if chunk.get('end', False):
+            full_response += "```\n"
+
+    if chunk['type'] == "console":
+        if chunk.get('start', False):
+            full_response += "```python\n"
+        if chunk.get('format', '') == "active_line":
+            console_content = chunk.get('content', '')
+            if console_content is None:
+               full_response += "No output available on console."
+        if chunk.get('format', '') == "output":
+            console_content = chunk.get('content', '')
+            full_response += console_content
+        if chunk.get('end', False):
+            full_response += "\n```\n"
+
+    if chunk['type'] == "image":
+        if chunk.get('start', False) or chunk.get('end', False):
+            full_response += "\n"
+        else:
+            image_format = chunk.get('format', '')
+            if image_format == 'base64.png':
+                image_content = chunk.get('content', '')
+                if image_content:
+                    image = Image.open(BytesIO(base64.b64decode(image_content)))
+                    new_image = Image.new("RGB", image.size, "white")
+                    new_image.paste(image, mask=image.split()[3])
+                    buffered = BytesIO()
+                    new_image.save(buffered, format="PNG")
+                    img_str = base64.b64encode(buffered.getvalue()).decode()
+                    full_response += f"![Image](data:image/png;base64,{img_str})\n"
+
+    return full_response
+
+async def synthesize_text_to_speech(text: str, voice: str, output_file: str) -> None:
+    """Synthesize text to speech and save to an output file."""
+    communicate = edge_tts.Communicate(text, voice)
+    with open(output_file, "wb") as file:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                file.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                print(f"WordBoundary: {chunk}")

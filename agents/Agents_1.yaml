@@ -1,0 +1,39 @@
+framework: autogen
+topic: Create me a stock analysis of the up to date pricing of TSLA
+roles:
+    data_researcher:
+        role: Data Researcher
+        tools:
+        - InternetSearchTool
+        backstory: Skilled in finding and extracting data from various sources, with
+            a focus on accuracy and relevance.
+        goal: Gather relevant data on TSLA stock pricing
+        tasks:
+            data_collection:
+                description: Search and collect up-to-date pricing data on TSLA stock
+                    from reputable websites and sources.
+                expected_output: Raw data on TSLA stock pricing.
+    data_analyst:
+        role: Data Analyst
+        tools: []
+        backstory: Expert in data analysis, with a focus on identifying trends and
+            patterns.
+        goal: Analyze and process collected data
+        tasks:
+            data_processing:
+                description: Clean, process, and analyze the collected data to extract
+                    relevant insights.
+                expected_output: Processed data with key trends and patterns identified.
+    stock_analyst:
+        role: Stock Analyst
+        tools: []
+        backstory: Skilled in financial analysis, with a focus on creating actionable
+            insights.
+        goal: Create a comprehensive stock analysis
+        tasks:
+            stock_analysis:
+                description: Create a comprehensive stock analysis of TSLA based on
+                    the processed data, including recommendations and projections.
+                expected_output: Comprehensive stock analysis report with up-to-date
+                    pricing information and recommendations.
+dependencies: []

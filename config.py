@@ -54,3 +54,6 @@ DEFAULT_TOOL_CLASS_DEFINITION = """
             ddgs = DDGS()
             results = ddgs.text(keywords=query, region='wt-wt', safesearch='moderate', max_results=5)
             return results"""
+
+OUTPUT_FILE = "tts_output.mp3"
+TTS_PERSONALITY = ""

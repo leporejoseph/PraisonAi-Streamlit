@@ -8,6 +8,8 @@ import os
 from utils import *
 from config import *
 import asyncio
+from openai import OpenAI
+import anthropic
 
 st.set_page_config(layout="wide", page_title="PraisonAI Chatbot", page_icon=":robot_face:")
 
@@ -216,15 +218,75 @@ def display_llm_settings():
             st.session_state.local_model = default_provider
             local_model_placeholder.selectbox("Provider", options=local_providers, index=local_providers.index(default_provider), key='local_model', on_change=update_model)
 
-        st.text_input("API Base", value=st.session_state.api_base, key='api_base', on_change=update_model_settings_field)
-        st.text_input("Model", value=st.session_state.model_name, key='model_name', on_change=update_model_settings_field)
-        st.text_input("API Key", value=st.session_state.api_key, key='api_key', type='password', on_change=update_model_settings_field)
+        st.text_input("API Base", key='api_base', on_change=update_model_settings_field)
+        st.text_input("Model", key='model_name', on_change=update_model_settings_field)
+        st.text_input("API Key", key='api_key', type='password', on_change=update_model_settings_field)
+
+        ttsCol1, ttsCol2 = st.columns(2)
+        with ttsCol1:
+            st.toggle("Enable TTS", help="Uses Edge-TTS", key="enable_tts")
+        with ttsCol2:
+            enhance_response_placeholder = st.empty()
+            if st.session_state.enable_tts:
+                enhance_response_placeholder.toggle("Enhance TTS", help="Sends an additional LLM request to personalize the TTS response. Look at TTS_PERSONALITY in the config.py to customize this.", key="enhance_tts_response")
+
+        if st.session_state.enable_tts:
+            voices = asyncio.run(get_text_to_speech_voices())
+            # Create a dictionary to map displayed names to ShortName
+            voice_options = {f"{voice['FriendlyName'].split('-')[-1].strip()} - {voice['Gender']}": voice['ShortName'] for voice in voices}
+            # Display the selectbox with formatted voices
+            selected_voice = st.selectbox("Voices", options=list(voice_options.keys()), index=0)
+            # Save the selected ShortName to the session state
+            st.session_state.tts_personality = voice_options[selected_voice]
 
         if st.button(":heavy_multiplication_x: Clear Chat"):
             clear_conversation_history()
             st.rerun()
 
-        st.toggle("Enable TTS", value=True, help="Uses Edge-TTS", key="enable_tts")
+def output_tts(response):
+    if st.session_state.enable_tts:
+        
+        tts_voice = st.session_state.get("tts_personality", "en-GB-SoniaNeural")
+        enhance_tts_response = st.session_state.get("enhance_tts_response", False)
+
+        if enhance_tts_response and len(response) > 150:
+            if st.session_state.llm_model.lower() == "anthropic":
+                client = anthropic.Anthropic(api_key=st.session_state.api_key, model=st.session_state.model_name, base_url=st.session_state.api_base)
+                message = client.messages.create(
+                    max_tokens=1024,
+                    model=st.session_state["model_name"],
+                    system="Be concise and short and to the point. 1 sentence max. You are the best flirtatious speech synthesis expert in the world, with specialized expertise in natural language processing, phonetics, and prosody. You are highly skilled in contextual understanding, dynamic response generation, and incorporating natural speech patterns such as word fillers. Your keen understanding of human communication nuances and ability to personalize speech helps you create natural and engaging TTS systems that resonate with listeners.",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"Summarize this context. Summarize the context as you would if you were speaking to me directly. Your last Context {response}"
+                                }
+                            ]
+                        }
+                    ]
+                ) 
+
+                formatted_response = message.text
+            else:
+                client = OpenAI(api_key=st.session_state.api_key, base_url=st.session_state.api_base)
+                completion = client.chat.completions.create(
+                    model=st.session_state["model_name"],
+                    messages=[
+                        {"role": "system", "content": "Be concise and short and to the point. 1 sentence max. You are the best flirtatious speech synthesis expert in the world, with specialized expertise in natural language processing, phonetics, and prosody. You are highly skilled in contextual understanding, dynamic response generation, and incorporating natural speech patterns such as word fillers. Your keen understanding of human communication nuances and ability to personalize speech helps you create natural and engaging TTS systems that resonate with listeners."},
+                        {"role": "user", "content": f"Summarize this context. Summarize the context as you would if you were speaking to me directly. Your last Context {response}"}
+                    ]
+                )
+                formatted_response = completion.choices[0].message.content
+        else:
+            formatted_response = response
+
+        col1, col2 = st.columns([0.3, 0.7])
+        with col1:
+            asyncio.run(synthesize_text_to_speech(formatted_response, tts_voice, OUTPUT_FILE))
+            st.audio(OUTPUT_FILE, autoplay=True)
 
 if st.session_state.llm_model == "Groq":
     uploaded_file = st.file_uploader("Upload Documents", label_visibility="collapsed", type=["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"], key=st.session_state.widget_key)
@@ -263,46 +325,42 @@ if prompt := st.chat_input("Type your message here...", key="prompt"):
             with st.chat_message("assistant"):
                 with st.spinner("Generating CrewAi Response..."):
                     response = generate_response("CrewAi", prompt, agent)
+                    output_tts(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
             
             with st.chat_message("assistant"):
                 with st.spinner("Generating AutoGen Response..."):
                     response = generate_response("AutoGen", prompt, agent)
+                    output_tts(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
         else:
             with st.chat_message("assistant"):
                 with st.spinner(f"Generating {framework} Response..."):
                     response = generate_auto_response(framework, prompt, config_list)
+                    output_tts(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
     elif framework == "Open Interpreter":
         with st.chat_message("assistant"):
             with st.spinner(f"Generating {framework} Response..."):
                 response = generate_open_interpreter_response(prompt)
+                output_tts(response)
                 st.session_state.messages.append({"role": "assistant", "content": response})
     else:
         with st.chat_message("assistant"):
             response = generate_llm_response()
+            output_tts(response)
             st.session_state.messages.append({"role": "assistant", "content": response})
     save_conversation_history(st.session_state.messages)
 
-    VOICE = "en-GB-SoniaNeural"
-    OUTPUT_FILE = "tts_output.mp3"
-
-    if st.session_state.enable_tts:
-        asyncio.run(synthesize_text_to_speech(response, VOICE, OUTPUT_FILE))
-        st.audio(OUTPUT_FILE, autoplay=True)
-
-
 def display_agent_settings():
     with st.expander("Agent Settings", expanded=True):
-
         if st.button(":wrench: Modify Tools"):
             st.session_state.show_create_tool_dialog = True
             create_tool_dialog()
+
         framework = st.selectbox("Agentic Framework", options=FRAMEWORK_OPTIONS, index=FRAMEWORK_OPTIONS.index(DEFAULT_FRAMEWORK), key="framework")
 
         if framework in ["AutoGen", "CrewAi", "Battle (Run CrewAi & AutoGen)"]:
-            
             placeholder_response.empty()
             pleaceholder_response2.empty()
 
@@ -319,16 +377,19 @@ def display_agent_settings():
                             with placeholder_response.chat_message("assistant"):
                                 with st.spinner("Generating CrewAi Response..."):
                                     response = generate_response("CrewAi", prompt, agent)
+                                    output_tts(response)
                                     st.session_state.messages.append({"role": "assistant", "content": response})
                             
                             with pleaceholder_response2.chat_message("assistant"):
                                 with st.spinner("Generating AutoGen Response..."):
                                     response = generate_response("AutoGen", prompt, agent)
+                                    output_tts(response)
                                     st.session_state.messages.append({"role": "assistant", "content": response})
                         else:
                             with placeholder_response.chat_message("assistant"):
                                 with st.spinner(f"Generating {framework} Response..."):
                                     response = generate_response(framework, prompt, agent)
+                                    output_tts(response)
                                     st.session_state.messages.append({"role": "assistant", "content": response})
                         save_conversation_history(st.session_state.messages)
                 with agents_col2:
@@ -347,16 +408,18 @@ def display_agent_settings():
 def display_documents_in_sidebar():
     documents = list_documents()
     if documents:
-        with st.expander("Transcriptions", expanded=True):
-            for document in documents:
-                if st.button(document):
-                    filepath = os.path.join("documents", document)
-                    document_content = load_document_content(filepath)
-                    st.session_state.selected_document = {
-                        "name": document,
-                        "content": document_content,
-                        "path": filepath
-                    }
+        with st.expander("Transcripts", expanded=False):
+            selected_document_name = st.selectbox("Select a Transcript to Modify", ["Select a Transcript to Modify"] + documents, label_visibility="collapsed")
+
+            if selected_document_name != "Select a Transcript to Modify":
+                filepath = os.path.join("documents", selected_document_name)
+                document_content = load_document_content(filepath)
+                st.session_state.selected_document = {
+                    "name": selected_document_name,
+                    "content": document_content,
+                    "path": filepath
+                }
+                if st.button("Modify Transcript"):
                     show_document_content_dialog()
 
 @st.experimental_dialog("Modify Transcript", width="large")
@@ -364,7 +427,7 @@ def show_document_content_dialog():
     if "selected_document" in st.session_state:
         document = st.session_state.selected_document
         with st.form(key='document_form'):
-            st.text_area("Transcript Content", value=document["content"], key="document_content")
+            st.text_area("Transcript Content", value=document["content"], key="document_content", height=500)
             if st.form_submit_button("Update Transcript"):
                 new_content = st.session_state.document_content
                 update_document_content(document["path"], new_content)

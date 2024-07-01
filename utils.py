@@ -331,9 +331,7 @@ def format_response(chunk, full_response):
 async def synthesize_text_to_speech(text: str, voice: str, output_file: str) -> None:
     """Synthesize text to speech and save to an output file."""
     communicate = edge_tts.Communicate(text, voice)
-    with open(output_file, "wb") as file:
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                file.write(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
-                print(f"WordBoundary: {chunk}")
+    await communicate.save(output_file)
+
+async def get_text_to_speech_voices() -> list:
+    return await edge_tts.list_voices()

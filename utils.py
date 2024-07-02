@@ -5,7 +5,6 @@ import yaml
 import json
 import streamlit as st
 from openai import OpenAI
-import anthropic
 from config import AGENTS_DIR, TOOLS_FILE, MODEL_SETTINGS
 import re
 from datetime import datetime
@@ -58,10 +57,14 @@ def update_env(model_name, api_base, api_key):
         with open(env_path, 'r') as file:
             env_vars = dict(line.strip().split('=', 1) for line in file if '=' in line)
 
+    # Determine the appropriate API key variable name
+    llm_key_prefix = st.session_state.get("local_model", "") if st.session_state.llm_model == "Local" else st.session_state.llm_model
+    api_key_var_name = f"{llm_key_prefix.upper().replace(' ', '_')}_API_KEY"
     env_vars.update({
         "OPENAI_MODEL_NAME": model_name,
         "OPENAI_API_BASE": api_base,
-        "OPENAI_API_KEY": api_key
+        "OPENAI_API_KEY": api_key,
+        api_key_var_name: api_key
     })
 
     with open(env_path, 'w') as file:
@@ -71,10 +74,7 @@ def update_env(model_name, api_base, api_key):
     os.environ.update(env_vars)
 
     # Initialize the client based on the model
-    if st.session_state.llm_model.lower() == "anthropic":
-        st.session_state.client = anthropic.Anthropic(api_key=env_vars.get("ANTHROPIC_API_KEY"))
-    else:
-        st.session_state.client = OpenAI(api_key=env_vars.get("OPENAI_API_KEY"), base_url=api_base)
+    st.session_state.client = OpenAI(api_key=env_vars.get(api_key_var_name), base_url=api_base)
 
 def update_model_settings(llm_provider, model_name, api_base):
     config_path = 'config.py'
@@ -100,7 +100,7 @@ def update_model_settings(llm_provider, model_name, api_base):
     with open(config_path, 'w') as file:
         file.writelines(new_lines)
 
-def save_config(value, key):
+def save_config(key, value):
     config = {}
     config_path = 'config.json'
     if os.path.exists(config_path):
@@ -109,6 +109,19 @@ def save_config(value, key):
     config[key] = value
     with open(config_path, 'w') as file:
         json.dump(config, file, indent=4)
+
+def save_tts_settings(enable_tts, enhance_tts, tts_personality):
+    save_config("enable_tts", enable_tts)
+    save_config("enhance_tts", enhance_tts)
+    save_config("tts_personality", tts_personality)
+
+def load_tts_settings():
+    config_path = 'config.json'
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as file:
+            config = json.load(file)
+        return config.get("enable_tts", True), config.get("enhance_tts", False), config.get("tts_personality", "en-GB-SoniaNeural")
+    return True, False, "en-GB-SoniaNeural"
 
 def get_api_key(model_name):
     model_key = model_name.upper().replace(' ', '_') + "_API_KEY"
@@ -136,14 +149,17 @@ def load_conversation_history():
             return json.load(file)
     return []
 
+@st.experimental_fragment
 def save_conversation_history(messages):
     with open(CONVERSATION_HISTORY_FILE, 'w') as file:
         json.dump(messages, file, indent=4)
 
+@st.experimental_fragment
 def clear_conversation_history():
     with open(CONVERSATION_HISTORY_FILE, 'w') as file:
         json.dump([], file, indent=4)
     st.session_state.messages = []
+    st.rerun()
 
 def load_selected_llm_provider():
     if os.path.exists('config.json'):
@@ -165,10 +181,7 @@ def initialize_session_state():
     if 'llm_model' not in st.session_state:
         st.session_state['llm_model'] = load_selected_llm_provider()
     if 'client' not in st.session_state:
-        if st.session_state.llm_model.lower() == "anthropic":
-            st.session_state['client'] = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        else:
-            st.session_state['client'] = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE"))
+        st.session_state['client'] = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE"))
     if 'api_key' not in st.session_state:
         st.session_state.api_key = get_api_key(st.session_state.llm_model)
     if 'show_edit_container' not in st.session_state:
@@ -184,7 +197,10 @@ def initialize_session_state():
     if 'model_name' not in st.session_state:
         st.session_state.model_name = os.getenv("OPENAI_MODEL_NAME")
     if 'enable_tts' not in st.session_state:
-        st.session_state.enable_tts = True
+        enable_tts, enhance_tts, tts_personality = load_tts_settings()
+        st.session_state.enable_tts = enable_tts
+        st.session_state.enhance_tts = enhance_tts
+        st.session_state.tts_personality = tts_personality
     if 'widget_key' not in st.session_state:
         st.session_state.widget_key = str(randint(1000, 100000000))
     if 'config_list' not in st.session_state:
@@ -335,3 +351,14 @@ async def synthesize_text_to_speech(text: str, voice: str, output_file: str) -> 
 
 async def get_text_to_speech_voices() -> list:
     return await edge_tts.list_voices()
+
+def move_and_rename_file(filename, target_folder):
+    if not os.path.exists(target_folder):
+        os.makedirs(target_folder)
+
+    # Get the list of existing files in the agents folder
+    existing_files = get_agents_list()
+    new_file_index = len(existing_files) + 1
+    new_filename = f"Agents_{new_file_index}.yaml"
+
+    os.rename(filename, os.path.join(target_folder, new_filename))

@@ -3,10 +3,13 @@
 config.json
 conversation_history.json
 .cache
-.chanlit
 .chainlit/translations/en-US.json
 .chainlit/translations/pt-BR.json
 __pycache__/config.cpython-312.pyc
 __pycache__/tools.cpython-312.pyc
 __pycache__/utils.cpython-312.pyc
 db/chroma.sqlite3
+documents
+trained_agents_data.pkl
+.chainlit/
+tts_output.mp3

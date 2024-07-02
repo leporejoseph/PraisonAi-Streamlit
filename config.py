@@ -1,3 +1,4 @@
+# config.py
 MODEL_SETTINGS = {
     "OpenAi": {
         "OPENAI_MODEL_NAME": "gpt-4o",
@@ -23,9 +24,9 @@ MODEL_SETTINGS = {
         "OPENAI_MODEL_NAME": "llama3-70b-8192",
         "OPENAI_API_BASE": "https://api.groq.com/openai/v1",
     },
-    "Anthropic": {
-        "OPENAI_MODEL_NAME": "claude-3-5-sonnet-20240620",
-        "OPENAI_API_BASE": "https://api.anthropic.com/openai/v1",
+    "Open Router": {
+        "OPENAI_MODEL_NAME": "anthropic/claude-3.5-sonnet",
+        "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
     }
 }
 
@@ -56,4 +57,9 @@ DEFAULT_TOOL_CLASS_DEFINITION = """
             return results"""
 
 OUTPUT_FILE = "tts_output.mp3"
-TTS_PERSONALITY = ""
+TTS_PERSONALITY = """Be concise and short and to the point. 1 sentence max. You are the best flirtatious speech synthesis expert in the world, 
+                    with specialized expertise in natural language processing, phonetics, and prosody. You are highly skilled in contextual 
+                    understanding, dynamic response generation, and incorporating natural speech patterns such as word fillers. 
+                    Your keen understanding of human communication nuances and ability to personalize speech helps you create 
+                    natural and engaging TTS systems that resonate with listeners.
+                    """

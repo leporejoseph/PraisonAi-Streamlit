@@ -2,20 +2,22 @@
 
 from praisonai import PraisonAI
 from praisonai.agents_generator import AgentsGenerator
-from praisonai.auto import AutoGenerator
 import streamlit as st
 import os
 from utils import *
 from config import *
 import asyncio
 from openai import OpenAI
-import anthropic
 
 st.set_page_config(layout="wide", page_title="PraisonAI Chatbot", page_icon=":robot_face:")
 
 initialize_env()
 initialize_session_state()
 
+uploaded_file_placeholder = st.empty()
+tool_dialog = st.empty()
+
+@st.experimental_fragment
 def update_model():
     llm_provider = st.session_state.llm_model if st.session_state.llm_model != "Local" else st.session_state.local_model
     api_key = get_api_key(llm_provider)
@@ -28,6 +30,19 @@ def update_model():
     st.session_state.model_name = model_name
     st.session_state.api_key = api_key 
     st.session_state.config_list[0]['api_type'] = st.session_state.llm_model.lower()
+
+    if st.session_state.llm_model == "Groq":
+        uploaded_file = uploaded_file_placeholder.file_uploader("Upload Documents", label_visibility="collapsed", type=["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"], key=st.session_state.widget_key)
+        if uploaded_file is not None:
+            with st.chat_message("assistant"):
+                with st.spinner("Transcribing..."):
+                    transcription = transcribe_audio(uploaded_file)
+                    with st.expander("Transcription Details", expanded=False):
+                        save_transcription_to_file(transcription, uploaded_file.name)
+                        st.session_state.messages.append({"role": "assistant", "content": transcription.text})
+                        save_conversation_history(st.session_state.messages)
+
+                        st.session_state.widget_key = str(randint(1000, 100000000))
 
 def update_model_settings_field():
     llm_provider = st.session_state.llm_model if st.session_state.llm_model != "Local" else st.session_state.local_model
@@ -44,13 +59,13 @@ def generate_response(framework_name, prompt, agent):
 
 def generate_open_interpreter_response(prompt):
     oi_agent = st.session_state.open_interpreter
-    oi_agent.offline = st.session_state.llm_model not in ["OpenAi", "Anthropic", "Groq"]
-    oi_agent.llm.model = st.session_state.model_name
+    #oi_agent.offline = st.session_state.llm_model == "Local"
+    oi_agent.llm.model = f"openrouter/{st.session_state.model_name}"
     oi_agent.llm.api_base = st.session_state.api_base
     oi_agent.llm.api_key = st.session_state.api_key
-    oi_agent.llm.temperature = 0
     oi_agent.llm.context_window = 8192
     oi_agent.llm.max_tokens = 4000
+    oi_agent.llm.supports_functions = True
     oi_agent.auto_run = True
     oi_agent.anonymized_telemetry = False
 
@@ -65,12 +80,14 @@ def generate_open_interpreter_response(prompt):
     return response
 
 def generate_auto_response(framework_name, prompt, config_list):
-    st.write(config_list)
-    agent_file_path = f"{AGENTS_DIR}/Agents_{len(os.listdir(AGENTS_DIR)) + 1}.yaml"
-    generator = AutoGenerator(topic=prompt, agent_file=agent_file_path, framework=framework_name.lower())
-    agent_file = generator.generate()
-    agents_generator = AgentsGenerator(agent_file, framework_name.lower(), config_list)
-    response = agents_generator.generate_crew_and_kickoff()
+    praison_ai = PraisonAI(
+        auto=prompt,
+        framework=framework_name.lower()
+    )
+    response = praison_ai.main()
+
+    # Move the created file to the agents folder and rename it
+    move_and_rename_file('test.yaml', 'agents')
 
     response_header = f"### {framework_name} Response ###\n"
     response = response_header + response
@@ -112,29 +129,12 @@ def fix_messages(messages):
 
 @st.experimental_fragment
 def generate_llm_response():
-    if st.session_state.llm_model.lower() == "anthropic":
-        formatted_messages = fix_messages(st.session_state.messages)
-
-        stream_response = st.empty()
-        with st.session_state.client.messages.stream(
-            max_tokens=1024,
-            messages=[{"role": m["role"], "content": m["content"]} for m in formatted_messages],
-            model=st.session_state["model_name"],
-        ) as stream:
-            response = ""
-            for text in stream.text_stream:
-                response += text
-                stream_response.markdown(response)
-            return response
-
-    else:
-        stream = st.session_state.client.chat.completions.create(
-            model=st.session_state["model_name"],
-            messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
-            stream=True,
-        )
-        response = st.write_stream(stream)
-
+    stream = st.session_state.client.chat.completions.create(
+        model=st.session_state["model_name"],
+        messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+        stream=True,
+    )
+    response = st.write_stream(stream)
     return response
 
 @st.experimental_dialog("Modify Agents", width="large")
@@ -190,21 +190,17 @@ def create_tool_dialog():
         if st.form_submit_button("Update"):
             with open(TOOLS_FILE, 'w') as file:
                 file.write(tool_code_input)
-            st.toast("Tools file has been updated.")
-            st.session_state.show_create_tool_dialog = False
             st.rerun()
 
 def append_tool_to_file(tool_code):
     with open(TOOLS_FILE, 'a') as file:
         file.write(f"\n# {tool_code.split('class ')[1].split('(')[0].strip()}\n{tool_code}\n")
 
-upload_document_placeholder = st.empty()
-
 @st.experimental_fragment
 def display_llm_settings():
     with st.expander("LLM Settings", expanded=True):
         col1, col2 = st.columns([2, 1])
-        llm_options = ["OpenAi", "Anthropic", "Mistral", "Groq", "Local"]
+        llm_options = ["OpenAi", "Open Router", "Mistral", "Groq", "Local"]
 
         llm_selection_placeholder = col1.empty()
         local_model_placeholder = col2.empty()
@@ -212,7 +208,6 @@ def display_llm_settings():
         llm_selection_placeholder.selectbox("Select LLM Provider", options=llm_options, key='llm_model', on_change=update_model)
         if st.session_state.llm_model == "Local":
             local_providers = sorted([provider for provider in MODEL_SETTINGS.keys() if is_local_model(provider)])
-            # Initialize the default provider from the environment variable
             model_name = os.getenv("OPENAI_MODEL_NAME")
             default_provider = next((key for key, value in MODEL_SETTINGS.items() if value["OPENAI_MODEL_NAME"] == model_name), local_providers[0])
             st.session_state.local_model = default_provider
@@ -224,62 +219,40 @@ def display_llm_settings():
 
         ttsCol1, ttsCol2 = st.columns(2)
         with ttsCol1:
-            st.toggle("Enable TTS", help="Uses Edge-TTS", key="enable_tts")
+            st.toggle("Enable TTS", help="Uses Edge-TTS", key="enable_tts", on_change=lambda: save_config("enable_tts", st.session_state.enable_tts))
         with ttsCol2:
             enhance_response_placeholder = st.empty()
             if st.session_state.enable_tts:
-                enhance_response_placeholder.toggle("Enhance TTS", help="Sends an additional LLM request to personalize the TTS response. Look at TTS_PERSONALITY in the config.py to customize this.", key="enhance_tts_response")
+                enhance_response_placeholder.toggle("Enhance TTS", help="Sends an additional LLM request to personalize the TTS response. Look at TTS_PERSONALITY in the config.py to customize this.", key="enhance_tts", on_change=lambda: save_config("enhance_tts", st.session_state.enhance_tts))
 
         if st.session_state.enable_tts:
             voices = asyncio.run(get_text_to_speech_voices())
-            # Create a dictionary to map displayed names to ShortName
             voice_options = {f"{voice['FriendlyName'].split('-')[-1].strip()} - {voice['Gender']}": voice['ShortName'] for voice in voices}
-            # Display the selectbox with formatted voices
-            selected_voice = st.selectbox("Voices", options=list(voice_options.keys()), index=0)
-            # Save the selected ShortName to the session state
+            default_index = list(voice_options.values()).index(st.session_state.tts_personality) if st.session_state.tts_personality in voice_options.values() else 0
+            selected_voice = st.selectbox("Voices", options=list(voice_options.keys()), index=default_index, key="voice_select")
             st.session_state.tts_personality = voice_options[selected_voice]
+            save_config("tts_personality", st.session_state.tts_personality)
 
         if st.button(":heavy_multiplication_x: Clear Chat"):
             clear_conversation_history()
-            st.rerun()
 
+@st.experimental_fragment
 def output_tts(response):
     if st.session_state.enable_tts:
         
         tts_voice = st.session_state.get("tts_personality", "en-GB-SoniaNeural")
-        enhance_tts_response = st.session_state.get("enhance_tts_response", False)
+        enhance_tts = st.session_state.get("enhance_tts", False)
 
-        if enhance_tts_response and len(response) > 150:
-            if st.session_state.llm_model.lower() == "anthropic":
-                client = anthropic.Anthropic(api_key=st.session_state.api_key, model=st.session_state.model_name, base_url=st.session_state.api_base)
-                message = client.messages.create(
-                    max_tokens=1024,
-                    model=st.session_state["model_name"],
-                    system="Be concise and short and to the point. 1 sentence max. You are the best flirtatious speech synthesis expert in the world, with specialized expertise in natural language processing, phonetics, and prosody. You are highly skilled in contextual understanding, dynamic response generation, and incorporating natural speech patterns such as word fillers. Your keen understanding of human communication nuances and ability to personalize speech helps you create natural and engaging TTS systems that resonate with listeners.",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": f"Summarize this context. Summarize the context as you would if you were speaking to me directly. Your last Context {response}"
-                                }
-                            ]
-                        }
-                    ]
-                ) 
-
-                formatted_response = message.text
-            else:
-                client = OpenAI(api_key=st.session_state.api_key, base_url=st.session_state.api_base)
-                completion = client.chat.completions.create(
-                    model=st.session_state["model_name"],
-                    messages=[
-                        {"role": "system", "content": "Be concise and short and to the point. 1 sentence max. You are the best flirtatious speech synthesis expert in the world, with specialized expertise in natural language processing, phonetics, and prosody. You are highly skilled in contextual understanding, dynamic response generation, and incorporating natural speech patterns such as word fillers. Your keen understanding of human communication nuances and ability to personalize speech helps you create natural and engaging TTS systems that resonate with listeners."},
-                        {"role": "user", "content": f"Summarize this context. Summarize the context as you would if you were speaking to me directly. Your last Context {response}"}
-                    ]
-                )
-                formatted_response = completion.choices[0].message.content
+        if enhance_tts and len(response) > 150:
+            client = OpenAI(api_key=st.session_state.api_key, base_url=st.session_state.api_base)
+            completion = client.chat.completions.create(
+                model=st.session_state["model_name"],
+                messages=[
+                    {"role": "system", "content": TTS_PERSONALITY},
+                    {"role": "user", "content": f"Summarize this context. Summarize it as if you are speaking directly to me, making it clear that the summary is derived from your message. Context {response}"}
+                ]
+            )
+            formatted_response = completion.choices[0].message.content
         else:
             formatted_response = response
 
@@ -288,18 +261,7 @@ def output_tts(response):
             asyncio.run(synthesize_text_to_speech(formatted_response, tts_voice, OUTPUT_FILE))
             st.audio(OUTPUT_FILE, autoplay=True)
 
-if st.session_state.llm_model == "Groq":
-    uploaded_file = st.file_uploader("Upload Documents", label_visibility="collapsed", type=["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"], key=st.session_state.widget_key)
-    if uploaded_file is not None:
-        with st.chat_message("assistant"):
-            with st.spinner("Transcribing..."):
-                transcription = transcribe_audio(uploaded_file)
-                with st.expander("Transcription Details", expanded=False):
-                    save_transcription_to_file(transcription, uploaded_file.name)
-                    st.session_state.messages.append({"role": "assistant", "content": transcription.text})
-                    save_conversation_history(st.session_state.messages)
 
-                    st.session_state.widget_key = str(randint(1000, 100000000))
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -355,7 +317,6 @@ if prompt := st.chat_input("Type your message here...", key="prompt"):
 def display_agent_settings():
     with st.expander("Agent Settings", expanded=True):
         if st.button(":wrench: Modify Tools"):
-            st.session_state.show_create_tool_dialog = True
             create_tool_dialog()
 
         framework = st.selectbox("Agentic Framework", options=FRAMEWORK_OPTIONS, index=FRAMEWORK_OPTIONS.index(DEFAULT_FRAMEWORK), key="framework")
@@ -398,12 +359,8 @@ def display_agent_settings():
         else:
             agent = None
 
-        if framework in ["CrewAi", "Battle (Run CrewAi & AutoGen)"]:
-            st.warning("Anthropic currently unsupported for CrewAi and Battle (Run CrewAi & AutoGen).")
-        if framework == "Open Interpreter":
-            st.warning("Open Interpreter currently unsupported for Anthropic.")
-        if st.session_state.get("agent") == "Auto Generate New Agents":
-            st.warning("Auto Generate New Agents currently unsupported for Anthropic.")
+        if framework in ["CrewAi", "Battle (Run CrewAi & AutoGen)"] and st.session_state.llm_model == "Open Router":
+            st.warning("Open Router is not available for the selected framework.")
 
 def display_documents_in_sidebar():
     documents = list_documents()
@@ -419,7 +376,7 @@ def display_documents_in_sidebar():
                     "content": document_content,
                     "path": filepath
                 }
-                if st.button("Modify Transcript"):
+                if st.button(":microphone: Modify Transcript"):
                     show_document_content_dialog()
 
 @st.experimental_dialog("Modify Transcript", width="large")
@@ -433,6 +390,19 @@ def show_document_content_dialog():
                 update_document_content(document["path"], new_content)
                 st.success("Document updated successfully")
                 st.rerun()
+
+if st.session_state.llm_model == "Groq":
+        uploaded_file = uploaded_file_placeholder.file_uploader("Upload Documents", label_visibility="collapsed", type=["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"], key=st.session_state.widget_key)
+        if uploaded_file is not None:
+            with st.chat_message("assistant"):
+                with st.spinner("Transcribing..."):
+                    transcription = transcribe_audio(uploaded_file)
+                    with st.expander("Transcription Details", expanded=False):
+                        save_transcription_to_file(transcription, uploaded_file.name)
+                        st.session_state.messages.append({"role": "assistant", "content": transcription.text})
+                        save_conversation_history(st.session_state.messages)
+
+                        st.session_state.widget_key = str(randint(1000, 100000000))
 
 with st.sidebar:
     st.title("PraisonAi Chatbot")

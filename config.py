@@ -13,7 +13,7 @@ MODEL_SETTINGS = {
         "OPENAI_API_BASE": "http://localhost:8001/v12",
     },
     "LM Studio": {
-        "OPENAI_MODEL_NAME": "dolphin",
+        "OPENAI_MODEL_NAME": "openai/dolphin",
         "OPENAI_API_BASE": "http://localhost:1234/v1",
     },
     "Mistral": {
@@ -24,13 +24,13 @@ MODEL_SETTINGS = {
         "OPENAI_MODEL_NAME": "llama3-70b-8192",
         "OPENAI_API_BASE": "https://api.groq.com/openai/v1",
     },
-    "Open Router": {
-        "OPENAI_MODEL_NAME": "anthropic/claude-3.5-sonnet",
+    "OpenRouter": {
+        "OPENAI_MODEL_NAME": "anthropic/claude-3.5-sonnet:beta",
         "OPENAI_API_BASE": "https://openrouter.ai/api/v1",
     }
 }
 
-FRAMEWORK_OPTIONS = ["None", "AutoGen", "CrewAi", "Battle (Run CrewAi & AutoGen)", "Open Interpreter"]
+FRAMEWORK_OPTIONS = ["None", "AutoGen", "CrewAi", "Open Interpreter"]
 DEFAULT_FRAMEWORK = "None"
 DEFAULT_AGENT = "Auto"
 AGENTS_DIR = "agents"

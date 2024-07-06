@@ -14,6 +14,7 @@ from PIL import Image
 from io import BytesIO
 import base64
 from random import randint
+from litellm import completion
 
 import asyncio
 import edge_tts
@@ -31,7 +32,7 @@ def initialize_env():
         "LM_STUDIO_API_KEY": "OPTIONAL",
         "MISTRAL_API_API_KEY": "Enter API Key Here",
         "GROQ_API_KEY": "Enter API Key Here",
-        "ANTHROPIC_API_KEY": "Enter API Key Here"
+        "OPENROUTER_API_KEY": "Enter API Key Here"
     }
 
     env_path = '.env'
@@ -59,7 +60,10 @@ def update_env(model_name, api_base, api_key):
 
     # Determine the appropriate API key variable name
     llm_key_prefix = st.session_state.get("local_model", "") if st.session_state.llm_model == "Local" else st.session_state.llm_model
+
     api_key_var_name = f"{llm_key_prefix.upper().replace(' ', '_')}_API_KEY"
+    
+    # Update the env variables dictionary
     env_vars.update({
         "OPENAI_MODEL_NAME": model_name,
         "OPENAI_API_BASE": api_base,
@@ -67,15 +71,18 @@ def update_env(model_name, api_base, api_key):
         api_key_var_name: api_key
     })
 
+    # Specifically add/update OPENAI_LLM_API_KEY if the model is OpenAi
+    if st.session_state.llm_model == "OpenAi":
+        env_vars["OPENAI_LLM_API_KEY"] = api_key
+
+    # Write the updated env variables back to the .env file
     with open(env_path, 'w') as file:
         for key, value in env_vars.items():
             file.write(f"{key}={value}\n")
 
+    # Update the os environment
     os.environ.update(env_vars)
-
-    # Initialize the client based on the model
-    st.session_state.client = OpenAI(api_key=env_vars.get(api_key_var_name), base_url=api_base)
-
+    
 def update_model_settings(llm_provider, model_name, api_base):
     config_path = 'config.py'
 
@@ -180,8 +187,6 @@ def save_selected_llm_provider(llm_provider):
 def initialize_session_state():
     if 'llm_model' not in st.session_state:
         st.session_state['llm_model'] = load_selected_llm_provider()
-    if 'client' not in st.session_state:
-        st.session_state['client'] = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE"))
     if 'api_key' not in st.session_state:
         st.session_state.api_key = get_api_key(st.session_state.llm_model)
     if 'show_edit_container' not in st.session_state:
@@ -208,14 +213,14 @@ def initialize_session_state():
             'model': st.session_state.model_name,
             'base_url': st.session_state.api_base,
             'api_key': st.session_state.api_key,
-            'api_type': st.session_state.llm_model.lower()
+            'api_type': st.session_state.llm_model.replace(" ","").lower()
         }]
     if 'open_interpreter' not in st.session_state:
         st.session_state.open_interpreter = OpenInterpreter()
         st.session_state.open_interpreter.llm.model = st.session_state.model_name
         st.session_state.open_interpreter.llm.api_base = st.session_state.api_base
         st.session_state.open_interpreter.llm.api_key = st.session_state.api_key
-
+    
 def load_tools_from_file(tools_file):
     if not os.path.exists(tools_file):
         with open(tools_file, 'w') as file:
@@ -362,3 +367,31 @@ def move_and_rename_file(filename, target_folder):
     new_filename = f"Agents_{new_file_index}.yaml"
 
     os.rename(filename, os.path.join(target_folder, new_filename))
+
+def convert_messages_to_open_interpreter_format(messages):
+    oi_messages = []
+    for msg in messages:
+        if msg["role"] == "user":
+            oi_messages.append({
+                "role": msg["role"],
+                "message": msg["content"]
+            })
+        elif msg["role"] == "assistant":
+            content = msg["content"].split("**Recap of the plan:**")[0]
+            if "```" in content:
+                code_blocks = content.split("```")
+                for i in range(1, len(code_blocks), 2):
+                    code_info = code_blocks[i].split("\n")
+                    language = code_info[0].strip().split(' ')[0]
+                    code = "\n".join(code_info[1:])
+                    oi_messages.append({
+                        "role": "assistant",
+                        "language": language,
+                        "code": code.strip()
+                    })
+            else:
+                oi_messages.append({
+                    "role": "assistant",
+                    "message": msg["content"]
+                })
+    return oi_messages

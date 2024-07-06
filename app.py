@@ -2,12 +2,15 @@
 
 from praisonai import PraisonAI
 from praisonai.agents_generator import AgentsGenerator
+from praisonai.inc import PraisonAIModel
+
 import streamlit as st
 import os
 from utils import *
 from config import *
 import asyncio
 from openai import OpenAI
+from litellm import completion
 
 st.set_page_config(layout="wide", page_title="PraisonAI Chatbot", page_icon=":robot_face:")
 
@@ -29,7 +32,12 @@ def update_model():
     st.session_state.api_base = api_base
     st.session_state.model_name = model_name
     st.session_state.api_key = api_key 
-    st.session_state.config_list[0]['api_type'] = st.session_state.llm_model.lower()
+    st.session_state.config_list = [{
+            'model': st.session_state.model_name,
+            'base_url': st.session_state.api_base,
+            'api_key': st.session_state.api_key,
+            'api_type': st.session_state.llm_model.lower()
+        }]
 
     if st.session_state.llm_model == "Groq":
         uploaded_file = uploaded_file_placeholder.file_uploader("Upload Documents", label_visibility="collapsed", type=["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"], key=st.session_state.widget_key)
@@ -58,16 +66,35 @@ def generate_response(framework_name, prompt, agent):
         return generate_praisonai_response(framework_name, agent, prompt)
 
 def generate_open_interpreter_response(prompt):
-    oi_agent = st.session_state.open_interpreter
-    #oi_agent.offline = st.session_state.llm_model == "Local"
-    oi_agent.llm.model = f"openrouter/{st.session_state.model_name}"
+
+    oi_agent = OpenInterpreter()
+    oi_agent.llm.model = st.session_state.model_name
     oi_agent.llm.api_base = st.session_state.api_base
     oi_agent.llm.api_key = st.session_state.api_key
+        
+
+    #oi_agent = st.session_state.open_interpreter
+    oi_agent.llm.api_key = st.session_state.api_key 
+    oi_agent.offline = False
+        
+    if st.session_state.llm_model not in ["Groq", "OpenAi", "OpenRouter", "Local"]:
+        oi_agent.llm.model = f"{st.session_state.llm_model}/{st.session_state.model_name}"
+    elif st.session_state.llm_model == "OpenRouter":
+        st.toast(st.session_state.llm_model)
+        oi_agent.llm.model = f"openrouter/{st.session_state.model_name}"
+    elif st.session_state.llm_model == "Local":
+        oi_agent.llm.model = f"{st.session_state.model_name}"
+        oi_agent.llm.api_key = "fake_key"
+    else:
+        oi_agent.llm.model = f"{st.session_state.model_name}"
+
+    oi_agent.llm.model = oi_agent.llm.model.lower()
     oi_agent.llm.context_window = 8192
     oi_agent.llm.max_tokens = 4000
-    oi_agent.llm.supports_functions = True
+    oi_agent.llm.api_base = st.session_state.api_base
     oi_agent.auto_run = True
     oi_agent.anonymized_telemetry = False
+    oi_agent.messages = convert_messages_to_open_interpreter_format(st.session_state.messages)
 
     response = "### Open Interpreter Response ###\n"
     message_placeholder = st.empty()
@@ -76,7 +103,7 @@ def generate_open_interpreter_response(prompt):
         response = format_response(chunk, response)
         message_placeholder.markdown(response + "▌")
         message_placeholder.markdown(response)
-
+    
     return response
 
 def generate_auto_response(framework_name, prompt, config_list):
@@ -97,10 +124,18 @@ def generate_auto_response(framework_name, prompt, config_list):
 
 def generate_praisonai_response(framework_name, agent, prompt):
     agent_file_path = f"{AGENTS_DIR}/{agent}"
-    config_list = st.session_state.config_list
-            
-    agents_generator = AgentsGenerator(agent_file_path, framework_name.lower(), config_list)
-    response = agents_generator.generate_crew_and_kickoff()
+
+    if framework_name.lower() == "crewai" and st.session_state.llm_model.lower() == "openrouter":
+        update_env(f"openrouter/{st.session_state.model_name}", st.session_state.api_base, st.session_state.api_key)
+
+    praison_ai = PraisonAI(
+        agent_file=agent_file_path,
+        framework=framework_name.lower(),
+    )
+    response = praison_ai.main()
+        
+    if framework_name.lower() == "crewai" and st.session_state.llm_model.lower() == "openrouter":
+        update_env(st.session_state.model_name, st.session_state.api_base, st.session_state.api_key)
 
     response_header = f"### {framework_name} Response ###\n"
     response = response_header + response
@@ -129,12 +164,30 @@ def fix_messages(messages):
 
 @st.experimental_fragment
 def generate_llm_response():
-    stream = st.session_state.client.chat.completions.create(
-        model=st.session_state["model_name"],
+    if st.session_state.llm_model != "Local":
+        model = st.session_state.llm_model.replace(" ", "").lower() + "/" + st.session_state["model_name"]
+        extra_args = {}
+    else:
+        model = st.session_state["model_name"]
+        extra_args = {
+            "api_base": st.session_state.api_base,
+            "custom_llm_provider": "openai"
+        }
+
+    stream = completion(
+        model=model,
         messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
         stream=True,
+        **extra_args
     )
-    response = st.write_stream(stream)
+
+    response_placeholder = st.empty()
+    response = ""
+    for chunk in stream:
+        content = chunk["choices"][0]["delta"].get("content")
+        if content:
+            response += content
+            response_placeholder.write(response)
     return response
 
 @st.experimental_dialog("Modify Agents", width="large")
@@ -200,7 +253,7 @@ def append_tool_to_file(tool_code):
 def display_llm_settings():
     with st.expander("LLM Settings", expanded=True):
         col1, col2 = st.columns([2, 1])
-        llm_options = ["OpenAi", "Open Router", "Mistral", "Groq", "Local"]
+        llm_options = ["OpenAi", "OpenRouter", "Mistral", "Groq", "Local"]
 
         llm_selection_placeholder = col1.empty()
         local_model_placeholder = col2.empty()
@@ -211,7 +264,7 @@ def display_llm_settings():
             model_name = os.getenv("OPENAI_MODEL_NAME")
             default_provider = next((key for key, value in MODEL_SETTINGS.items() if value["OPENAI_MODEL_NAME"] == model_name), local_providers[0])
             st.session_state.local_model = default_provider
-            local_model_placeholder.selectbox("Provider", options=local_providers, index=local_providers.index(default_provider), key='local_model', on_change=update_model)
+            local_model_placeholder.selectbox("Provider", options=local_providers, key='local_model', on_change=update_model)
 
         st.text_input("API Base", key='api_base', on_change=update_model_settings_field)
         st.text_input("Model", key='model_name', on_change=update_model_settings_field)
@@ -283,24 +336,11 @@ if prompt := st.chat_input("Type your message here...", key="prompt"):
         framework = st.session_state.get("framework", "none")
         config_list = st.session_state.config_list
 
-        if framework.lower() == "battle (run crewai & autogen)":
-            with st.chat_message("assistant"):
-                with st.spinner("Generating CrewAi Response..."):
-                    response = generate_response("CrewAi", prompt, agent)
-                    output_tts(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-            
-            with st.chat_message("assistant"):
-                with st.spinner("Generating AutoGen Response..."):
-                    response = generate_response("AutoGen", prompt, agent)
-                    output_tts(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-        else:
-            with st.chat_message("assistant"):
-                with st.spinner(f"Generating {framework} Response..."):
-                    response = generate_auto_response(framework, prompt, config_list)
-                    output_tts(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
+        with st.chat_message("assistant"):
+            with st.spinner(f"Generating {framework} Response..."):
+                response = generate_auto_response(framework, prompt, config_list)
+                output_tts(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
     elif framework == "Open Interpreter":
         with st.chat_message("assistant"):
             with st.spinner(f"Generating {framework} Response..."):
@@ -321,7 +361,7 @@ def display_agent_settings():
 
         framework = st.selectbox("Agentic Framework", options=FRAMEWORK_OPTIONS, index=FRAMEWORK_OPTIONS.index(DEFAULT_FRAMEWORK), key="framework")
 
-        if framework in ["AutoGen", "CrewAi", "Battle (Run CrewAi & AutoGen)"]:
+        if framework in ["AutoGen", "CrewAi"]:
             placeholder_response.empty()
             pleaceholder_response2.empty()
 
@@ -334,33 +374,17 @@ def display_agent_settings():
                         framework = st.session_state.get("framework", "none")
                         agent = st.session_state.get("agent", "")
 
-                        if framework.lower() == "battle (run crewai & autogen)":
-                            with placeholder_response.chat_message("assistant"):
-                                with st.spinner("Generating CrewAi Response..."):
-                                    response = generate_response("CrewAi", prompt, agent)
-                                    output_tts(response)
-                                    st.session_state.messages.append({"role": "assistant", "content": response})
-                            
-                            with pleaceholder_response2.chat_message("assistant"):
-                                with st.spinner("Generating AutoGen Response..."):
-                                    response = generate_response("AutoGen", prompt, agent)
-                                    output_tts(response)
-                                    st.session_state.messages.append({"role": "assistant", "content": response})
-                        else:
-                            with placeholder_response.chat_message("assistant"):
-                                with st.spinner(f"Generating {framework} Response..."):
-                                    response = generate_response(framework, prompt, agent)
-                                    output_tts(response)
-                                    st.session_state.messages.append({"role": "assistant", "content": response})
+                        with placeholder_response.chat_message("assistant"):
+                            with st.spinner(f"Generating {framework} Response..."):
+                                response = generate_response(framework, prompt, agent)
+                                output_tts(response)
+                                st.session_state.messages.append({"role": "assistant", "content": response})
                         save_conversation_history(st.session_state.messages)
                 with agents_col2:
                     if st.button(":robot_face: Modify Agents", use_container_width=True):
                         edit_agent_dialog()
         else:
             agent = None
-
-        if framework in ["CrewAi", "Battle (Run CrewAi & AutoGen)"] and st.session_state.llm_model == "Open Router":
-            st.warning("Open Router is not available for the selected framework.")
 
 def display_documents_in_sidebar():
     documents = list_documents()
@@ -405,7 +429,7 @@ if st.session_state.llm_model == "Groq":
                         st.session_state.widget_key = str(randint(1000, 100000000))
 
 with st.sidebar:
-    st.title("PraisonAi Chatbot")
+    st.image('images/praisonai-logo-large.png', width=200)
     display_llm_settings()
     display_agent_settings()
     display_documents_in_sidebar()

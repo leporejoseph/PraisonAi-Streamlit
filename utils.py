@@ -9,7 +9,6 @@ from config import AGENTS_DIR, TOOLS_FILE, MODEL_SETTINGS
 import re
 from datetime import datetime
 from groq import Groq
-from interpreter import OpenInterpreter
 from PIL import Image
 from io import BytesIO
 import base64
@@ -169,11 +168,16 @@ def clear_conversation_history():
     st.rerun()
 
 def load_selected_llm_provider():
-    if os.path.exists('config.json'):
-        with open('config.json', 'r') as file:
-            config = json.load(file)
-            return config.get('llm_provider', 'OpenAi')
-    return 'OpenAi'
+    config_path = 'config.json'
+    default_provider = 'OpenAi'
+
+    if not os.path.exists(config_path):
+        with open(config_path, 'w') as file:
+            json.dump({'llm_provider': default_provider}, file)
+
+    with open(config_path, 'r') as file:
+        config = json.load(file)
+        return config.get('llm_provider', default_provider)
 
 def save_selected_llm_provider(llm_provider):
     config = {}
@@ -215,11 +219,6 @@ def initialize_session_state():
             'api_key': st.session_state.api_key,
             'api_type': st.session_state.llm_model.replace(" ","").lower()
         }]
-    if 'open_interpreter' not in st.session_state:
-        st.session_state.open_interpreter = OpenInterpreter()
-        st.session_state.open_interpreter.llm.model = st.session_state.model_name
-        st.session_state.open_interpreter.llm.api_base = st.session_state.api_base
-        st.session_state.open_interpreter.llm.api_key = st.session_state.api_key
     
 def load_tools_from_file(tools_file):
     if not os.path.exists(tools_file):
@@ -367,31 +366,3 @@ def move_and_rename_file(filename, target_folder):
     new_filename = f"Agents_{new_file_index}.yaml"
 
     os.rename(filename, os.path.join(target_folder, new_filename))
-
-def convert_messages_to_open_interpreter_format(messages):
-    oi_messages = []
-    for msg in messages:
-        if msg["role"] == "user":
-            oi_messages.append({
-                "role": msg["role"],
-                "message": msg["content"]
-            })
-        elif msg["role"] == "assistant":
-            content = msg["content"].split("**Recap of the plan:**")[0]
-            if "```" in content:
-                code_blocks = content.split("```")
-                for i in range(1, len(code_blocks), 2):
-                    code_info = code_blocks[i].split("\n")
-                    language = code_info[0].strip().split(' ')[0]
-                    code = "\n".join(code_info[1:])
-                    oi_messages.append({
-                        "role": "assistant",
-                        "language": language,
-                        "code": code.strip()
-                    })
-            else:
-                oi_messages.append({
-                    "role": "assistant",
-                    "message": msg["content"]
-                })
-    return oi_messages

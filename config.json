@@ -1,0 +1,4 @@
+{
+    "tts_personality": "en-GB-SoniaNeural",
+    "llm_provider": "OpenAi"
+}

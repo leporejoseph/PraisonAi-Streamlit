@@ -11,7 +11,7 @@ PraisonAI is a sophisticated chatbot built using the Streamlit framework. It int
 
 - **Multiple LLM Providers**: Select from various language model providers such as OpenAI, Ollama Mistral, FastChat, LM Studio, Mistral, Groq, and Anthropic.
 - **Agent Management**: Create, edit, and manage multiple chatbot agents with customizable roles and tools.
-- **Flexible Frameworks**: Supports different frameworks for generating responses including CrewAi, AutoGen, Battle, and Open Interpreter.
+- **Flexible Frameworks**: Supports different frameworks for generating responses including CrewAi and AutoGen.
 - **Interactive UI**: Streamlit-based interface with wide mode configuration for enhanced usability.
 - **Custom Tools**: Create and manage custom tools to enhance chatbot capabilities.
 - **Text-to-Speech (TTS)**: Utilize Edge TTS for converting text responses into speech.
@@ -83,7 +83,6 @@ To edit an existing tool:
 - **edit_agent_dialog**: Dialog for editing an existing agent.
 - **create_tool_dialog**: Dialog for creating a new tool.
 - **edit_tool_dialog**: Dialog for editing an existing tool.
-- **generate_open_interpreter_response**: Generates a response using Open Interpreter.
 
 #### utils.py
 

@@ -30,7 +30,7 @@ MODEL_SETTINGS = {
     }
 }
 
-FRAMEWORK_OPTIONS = ["None", "AutoGen", "CrewAi", "Open Interpreter"]
+FRAMEWORK_OPTIONS = ["None", "AutoGen", "CrewAi"]
 DEFAULT_FRAMEWORK = "None"
 DEFAULT_AGENT = "Auto"
 AGENTS_DIR = "agents"

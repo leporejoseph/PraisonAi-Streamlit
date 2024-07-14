@@ -65,47 +65,6 @@ def generate_response(framework_name, prompt, agent):
     else:
         return generate_praisonai_response(framework_name, agent, prompt)
 
-def generate_open_interpreter_response(prompt):
-
-    oi_agent = OpenInterpreter()
-    oi_agent.llm.model = st.session_state.model_name
-    oi_agent.llm.api_base = st.session_state.api_base
-    oi_agent.llm.api_key = st.session_state.api_key
-        
-
-    #oi_agent = st.session_state.open_interpreter
-    oi_agent.llm.api_key = st.session_state.api_key 
-    oi_agent.offline = False
-        
-    if st.session_state.llm_model not in ["Groq", "OpenAi", "OpenRouter", "Local"]:
-        oi_agent.llm.model = f"{st.session_state.llm_model}/{st.session_state.model_name}"
-    elif st.session_state.llm_model == "OpenRouter":
-        st.toast(st.session_state.llm_model)
-        oi_agent.llm.model = f"openrouter/{st.session_state.model_name}"
-    elif st.session_state.llm_model == "Local":
-        oi_agent.llm.model = f"{st.session_state.model_name}"
-        oi_agent.llm.api_key = "fake_key"
-    else:
-        oi_agent.llm.model = f"{st.session_state.model_name}"
-
-    oi_agent.llm.model = oi_agent.llm.model.lower()
-    oi_agent.llm.context_window = 8192
-    oi_agent.llm.max_tokens = 4000
-    oi_agent.llm.api_base = st.session_state.api_base
-    oi_agent.auto_run = True
-    oi_agent.anonymized_telemetry = False
-    oi_agent.messages = convert_messages_to_open_interpreter_format(st.session_state.messages)
-
-    response = "### Open Interpreter Response ###\n"
-    message_placeholder = st.empty()
-
-    for chunk in oi_agent.chat([{"role": "user", "type": "message", "content": prompt}], display=False, stream=True):
-        response = format_response(chunk, response)
-        message_placeholder.markdown(response + "▌")
-        message_placeholder.markdown(response)
-    
-    return response
-
 def generate_auto_response(framework_name, prompt, config_list):
     praison_ai = PraisonAI(
         auto=prompt,
@@ -339,12 +298,6 @@ if prompt := st.chat_input("Type your message here...", key="prompt"):
         with st.chat_message("assistant"):
             with st.spinner(f"Generating {framework} Response..."):
                 response = generate_auto_response(framework, prompt, config_list)
-                output_tts(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
-    elif framework == "Open Interpreter":
-        with st.chat_message("assistant"):
-            with st.spinner(f"Generating {framework} Response..."):
-                response = generate_open_interpreter_response(prompt)
                 output_tts(response)
                 st.session_state.messages.append({"role": "assistant", "content": response})
     else:

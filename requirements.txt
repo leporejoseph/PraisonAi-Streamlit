@@ -1,10 +1,12 @@
-praisonai
-open-interpreter
 streamlit
+praisonai
+praisonai[crewai-tools]
 anthropic
+langchain
 langchain-anthropic
 groq
 duckduckgo-search
 asyncio
 edge_tts
 PyYAML
+litellm
